@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Summarizer",
+  "version": "0.1.0",
+  "description": "Turns any tab into a scoped RAG chatbot over that page's content.",
+  "permissions": ["activeTab", "scripting", "sidePanel", "storage"],
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "action": {
+    "default_title": "Summarizer (Phase A test harness — click to scan active tab)"
+  }
+}

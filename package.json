@@ -1,0 +1,9 @@
+{
+  "name": "summarizer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chrome extension: scoped RAG chatbot over the current tab's content.",
+  "scripts": {
+    "test": "node --test"
+  }
+}
