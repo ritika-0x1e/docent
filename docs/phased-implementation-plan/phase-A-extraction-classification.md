@@ -151,11 +151,26 @@ I1 (side panel shell) isn't built until phase 4. To test A1–A4 in isolation no
 
 ## Exit criteria for Phase A
 
-- [ ] `lib/classify.js` unit tests pass for all three classification branches
-- [ ] Harness confirms A1 extracts sane title/text on 3 manually chosen real pages (headed docs page, headingless blog, JS-heavy SPA)
-- [ ] Harness confirms A2 correctly routes a real sparse page and a real text-heavy page
-- [ ] Harness confirms force-scan override bypasses the A2 gate
-- [ ] Harness confirms A4 catches both a restricted-URL rejection and a Trusted-Types-style handshake timeout, without misfiring on a normal page
-- [ ] `manifest.json` requests only `activeTab`, `scripting`, `sidePanel`, `storage` — no host_permissions
+- [x] `lib/classify.js` unit tests pass for all three classification branches
+- [x] Harness confirms A1 extracts sane title/text on 3 manually chosen real pages (headed docs page, headingless blog, JS-heavy SPA) — passes, see test log
+- [x] Harness confirms A2 correctly routes a real sparse page and a real text-heavy page
+- [x] Harness confirms force-scan override bypasses the A2 gate
+- [x] Harness confirms A4 catches both a restricted-URL rejection and a Trusted-Types-style handshake timeout, without misfiring on a normal page
+- [x] `manifest.json` requests only `activeTab`, `scripting`, `sidePanel`, `storage` — no host_permissions
+
+### Test log (2026-11-01, manual harness runs)
+
+- **Unit tests**: `npm test` — 6/6 pass.
+- **A1 headed docs page**: "PSBA Terms of Reference" → `text`, 228 words (only just above the 175 floor).
+- **A1 blog**: "How to Structure Your Blog Posts with Subheadings" → `text`, 850 words (this post likely has headings, so headingless was re-tested below).
+- **A1 headingless essays** (paulgraham.com, legacy table/`<font>`/`<br>` markup): "Making Startups Powerful" → `text`, 2907 words; "How to Do Great Work" → `text`, 11619 words. Readability handles the legacy layout fine — B1's no-heading breakpoint path has valid input. (paulgraham.com homepage → `sparse`, 19 words — correct, it's an image-link index.)
+- **A1 JS-heavy SPA**: Reddit's "Reddit Rules" page → `text`, 244 words. Correct page extracted.
+- **Untested risk (not a confirmed bug)**: `document.cloneNode(true)` does not copy shadow roots, so pages whose main text lives inside web components' shadow DOM could extract the wrong text. Not observed on any page yet. If a real page shows it, the fix belongs in A1 (flatten the rendered tree into the copy before Readability), and B1/F would also need to cross shadow boundaries when walking the live DOM.
+- **A1 JS-heavy SPA (non-shadow-DOM)**: "Scenario-Based Git Interview Questions" → `text`, 1394 words, mediaRatio ≈ 0.07. Correct article extracted.
+- **A2 sparse**: YouTube video page → `sparse`, 13–18 words, mediaRatio ≈ 0.49.
+- **A3 force-scan**: `forceScan(tabId)` on the YouTube sparse page → `status: "ok"` with classification still `sparse` (override bypasses the gate without altering the verdict).
+- **A4 restricted URL**: `chrome://extensions` → `injection-rejected` ("Cannot access a chrome:// URL").
+- **A4 Trusted Types, no false positive**: YouTube (enforces Trusted Types) scanned normally — no `handshake-timeout` misfire.
+- **A4 handshake timeout**: simulated by temporarily commenting out the `ready` send in `content/bootstrap.js` → `handshake-timeout` after 2s. Change reverted; normal scans confirmed after.
 
 Once all boxes are checked, move to Phase B (sectioning) per §6 — B1 will need to solve the live-DOM re-anchoring problem flagged above before it can capture `Range`s.
