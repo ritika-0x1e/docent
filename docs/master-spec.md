@@ -32,7 +32,7 @@ Content script (per tab)
   → link harvesting (inline vs nav)
         ↓
 Background service worker
-  → embeddings (Transformers.js, local, in a Web Worker)
+  → embeddings (Transformers.js, local, in a Web Worker hosted by an offscreen document — see §7.1)
   → vector store (IndexedDB, cosine similarity)
   → agent loop (tool-use: retrieve_sections, web_search)
   → LLM calls (Gemini Flash free tier now; local Ollama later if quota becomes a problem)
@@ -56,7 +56,8 @@ No dedicated backend server is required for v1. A Cloudflare Workers free-tier p
 - If the content script can't attach at all (strict CSP, Trusted Types, permission-blocked sites) — detect this and clearly say "this site restricts extension access," never fail silently.
 
 ### 3.2 Sectioning
-- **Structured case**: split on existing `h1–h4`, keep each section's DOM `Range` for later highlighting.
+- **Structured case**: split on existing `h1–h4`, and keep each section's location for later highlighting. (Readability renames `h1` to `h2` in its output, so in practice this is `h2`–`h4`.)
+- **Section location = per-block text-quote anchors, not one `Range`** (decided in Phase B planning, 2026-11-02). Each paragraph-level block in a section stores `{exact, prefix, suffix}`. Live `Range`s are rebuilt from these anchors inside the content script and never stored. A single heading-to-heading `Range` would also highlight the boilerplate Readability stripped between paragraphs. A `Range` also can't be messaged out of the content script or persisted, and F3 has to re-highlight a page after reload. The CSS Custom Highlight API accepts multiple ranges per highlight, so §3.8 is unaffected.
 - **Unstructured case**: no LLM needed to find boundaries. Embed paragraphs, walk sequentially, and break into a new section when cosine similarity to the running section centroid drops below a threshold (classic semantic-breakpoint chunking).
 - Only call the LLM **after** boundaries are fixed, to generate a heading + 1-line summary per section — keeps LLM usage cheap and deferred.
 
@@ -93,6 +94,7 @@ Revised approach:
 - Tool-use pattern: `retrieve_sections(query, k=5)` (cosine similarity over local embeddings) and `web_search(query)` (only invoked when the page's own corpus doesn't cover the question).
 - Selection-scoped mode: if the user has text selected on the page, skip retrieval entirely and answer from just that selection — cheaper and more precise for "explain this specific part" questions.
 - Context budget is naturally bounded by `k`, not by how many pages are linked in a thread — so threads can grow without needing an explicit pruning scheme.
+- **Section embeddings are chunked (decided 2026-11-03).** MiniLM reads only ~256 tokens (~200 words), so one vector per section would represent only its opening. Each section is split into ~180-word chunks with a 30-word overlap, each chunk is embedded, and a section's retrieval score is its best chunk's similarity (max-sim). Retrieval still returns whole sections, so E1 and F2 are unaffected.
 
 ### 3.8 Citation highlighting
 - Use the **CSS Custom Highlight API** (`Highlight`, `CSS.highlights.set()`) to highlight the cited `Range` on the *live* page — non-destructive, no span-wrapping, doesn't fight the host page's own scripts/DOM state.
@@ -167,13 +169,13 @@ Each item below should be buildable and testable in isolation before integration
 - **A4.** CSP/injection-failure detection + "site restricts access" message
 
 ### B. Sectioning
-- **B1.** Heading-based split (h1–h4) with DOM `Range` capture per section
+- **B1.** Heading-based split (h1–h4) with per-block text-quote anchors (live `Range`s rebuilt from them; see §3.2)
 - **B2.** Paragraph embedding + running-centroid cosine similarity breakpoint detection (unstructured fallback)
 - **B3.** LLM call: generate heading + 1-line summary per section (post-boundary-fixing)
 
 ### C. Local embeddings & storage
 - **C1.** Transformers.js + MiniLM running in a Web Worker
-- **C2.** IndexedDB schema for section vectors + metadata (per-page corpus)
+- **C2.** IndexedDB schema for section chunk vectors + metadata (per-page corpus; see §3.7 on chunking)
 - **C3.** Cosine similarity top-k retrieval function
 
 ### D. Link harvesting & picklist
@@ -220,9 +222,9 @@ Each item below should be buildable and testable in isolation before integration
 Recommended build sequence — each phase should be functional and testable before moving to the next:
 
 1. **A** — Extraction, classification, force-check banner (gates everything downstream)
-2. **B** — Sectioning + heading/summary generation, rendered as a static reading view (no chat yet)
-3. **C** — Local embeddings + retrieval, tested standalone ("show top 5 sections for this query")
-4. **H1, H2 (partial), I1, I2** — Side panel shell with scan button wired to A+B+C for a single page, no threads yet
+2. **B** — Sectioning + heading/summary generation (no chat yet). The minimal C1 embedding worker is built here, since B2 can't work without embeddings. The static reading view is deferred to I2 in step 4, because it needs the side panel; B is verified through the console harness until then.
+3. **C** — Local embeddings + retrieval, tested standalone ("show top 5 sections for this query"). C1's worker already exists from step 2.
+4. **H1, H2 (partial), I1, I2** — Side panel shell with scan button wired to A+B+C for a single page, no threads yet. The chat area temporarily holds a "find sections" search box (top-5 retrieval results, click to highlight) so retrieval can be tested through the UI; it's removed when I3 lands in step 6 (decided 2026-11-03).
 5. **G1, G2, G3, H3, H4** — Thread persistence and the full scan-button behavior matrix, still single-page corpora
 6. **E1, E3, E4, I3** — Wire retrieval + Gemini Flash into an actual chat loop with selection-scoped mode
 7. **F1, F2, F3** — Citation highlighting (live + cross-page snippet mode)
@@ -230,6 +232,18 @@ Recommended build sequence — each phase should be functional and testable befo
 9. **D1–D6** — Link harvesting, scoring, quota/backfill, picklist UI, approved-link crawling (most fragile piece — nav/inline heuristics will need real-world tuning against actual sites)
 10. **G4** — Soft cap warning once multi-page threads are common in testing
 11. **E5** — Local Ollama fallback (only if/when Gemini quota becomes a real constraint)
+
+Per-phase plans live in `docs/phased-implementation-plan/`, one file per phase.
+
+## 6a. Testing strategy (decided 2026-11-02)
+
+- **Default:** each phase is fully tested on its own before the next starts.
+- **Exception: phases 2, 3 and 4 (B, C, side panel shell) are built back to back and fully tested in one combined run at the end of phase 4.**
+  - Each of those phase plans lists **checkpoints**: a few quick manual tests that must pass before moving to the next phase. They cover browser-environment failures that unit tests can't catch and that everything later builds on: anchoring, the embedding worker loading, retrieval sanity, persistence, and side-panel tab access.
+  - Unit tests for `lib/` still run in every phase.
+  - The combined checklist is in `phase-4-side-panel-shell.md`.
+- **Reminder for anyone resuming this work:** if phases 2–4 are built but the combined run hasn't been ticked off in `phase-4-side-panel-shell.md`, run it before starting phase 5. If a phase 2–4 checkpoint is unticked, run it before building the next phase.
+- From phase 5 on, testing goes back to per-phase, unless a new exception is agreed and recorded here.
 
 ---
 
@@ -239,7 +253,12 @@ Recommended build sequence — each phase should be functional and testable befo
 - Base manifest requests only `activeTab`, `scripting`, `sidePanel`, `storage` — no upfront host_permissions. (`scripting` added during Phase A planning — required for programmatic `chrome.scripting.executeScript` injection, the mechanism this strategy relies on to avoid a standing `content_scripts` grant.)
 - **D6 (crawl approved links)**: request `optional_host_permissions` at runtime, per-origin, at the moment a link is approved in the picklist — never a standing grant for origins the user hasn't actually approved.
 - **E2 (web search)**: add a single narrow static host_permission for `html.duckduckgo.com` when E2 is built (phase 8) — fixed, low-scope, known upfront.
+- **Phase B (embeddings)**: adds the `offscreen` permission and `'wasm-unsafe-eval'` in the extension-pages CSP (decided 2026-11-02). MV3 service workers can't spawn Web Workers, so the background creates an offscreen document (reason `WORKERS`), which hosts the embedding worker. ONNX Runtime runs as WebAssembly, so it needs the CSP entry. Neither grants access to any site.
 - Rationale: matches the existing "minimum permissions per phase, no `<all_urls>` until phase 9" principle already in CLAUDE.md; avoids a standing broad grant for a personal/free-first tool.
+
+### 7.2 Embedding model weights (decided 2026-11-02: download on first use)
+- The Transformers.js library and the ONNX Runtime `.wasm` files are **vendored**, because MV3 forbids remote code. The `all-MiniLM-L6-v2` quantized weights (~23 MB, data, not code) are **fetched from the Hugging Face hub on first use** and cached by Transformers.js in the Cache API.
+- Trade-off accepted: the first scan needs network access and takes a few extra seconds; later scans work offline. This keeps 23 MB of binaries out of git. HF serves permissive CORS, so no host permission is needed.
 
 ### 3.9a DuckDuckGo HTML markup parsing (decided: defer + resilient selectors)
 - Selectors for sponsored-vs-organic blocks are **not** pinned in the spec — DDG's markup is unofficial and drifts, so locking them in now would likely be stale by phase 8.

@@ -17,7 +17,7 @@ Do not start a sub-feature not listed there without checking in first. If a sub-
 
 ## Current phase
 
-**Setup / environment phase.** No feature code has been written yet. This session's job is scaffolding: project structure, tooling, and skills — not implementation. When actual coding starts, work sub-feature by sub-feature in the order given in `docs/master-spec.md` §6, one at a time, each independently testable before moving on.
+**Phase A (extraction & classification): done and tested.** Next: phases 2–4 (B sectioning, C embeddings/retrieval, side panel shell), built back to back under the combined-testing exception in `docs/master-spec.md` §6a. Per-phase plans are in `docs/phased-implementation-plan/`. Before starting any phase, check that plan's **checkpoints** and its "decisions needing sign-off" section. Remind the user to run any checkpoint left unticked, or the combined run if it's still pending, before building further. Work sub-feature by sub-feature in the order given in `docs/master-spec.md` §6.
 
 ## Tech stack (do not substitute without discussion)
 
@@ -26,12 +26,12 @@ Do not start a sub-feature not listed there without checking in first. If a sub-
 | Extension platform | Chrome Manifest V3, `chrome.sidePanel` |
 | Content extraction | Readability.js |
 | Sectioning | Custom heuristics (heading split) + embedding-based centroid breakpoint detection for unstructured pages |
-| Embeddings | Transformers.js, `all-MiniLM-L6-v2`, quantized, run in a Web Worker |
+| Embeddings | Transformers.js, `all-MiniLM-L6-v2`, quantized, run in a Web Worker hosted by an offscreen document (MV3 service workers can't spawn workers). Library + wasm vendored; model weights downloaded on first use and cached (spec §7.2) |
 | Vector storage | IndexedDB (raw cosine similarity, no external vector DB — page-scale doesn't need one) |
 | LLM | Gemini Flash (free tier) via direct API calls from the background service worker; local Ollama as a documented fallback if quota becomes a real constraint (not built yet — see spec §3.6 and sub-feature E5) |
 | Web search | Plain `fetch()` against DuckDuckGo's HTML endpoint, no API key; Brave Search API as a fallback path if DDG markup drifts |
 | Citation highlighting | CSS Custom Highlight API (`Highlight`, `CSS.highlights.set()`) — never DOM-mutating span wraps |
-| Language | JavaScript throughout (content scripts, background worker, side panel UI). No build-step framework required for v1 — keep it lightweight; only reach for a bundler if a library genuinely needs one (e.g. Transformers.js) |
+| Language | JavaScript throughout (content scripts, background worker, side panel UI). No build-step framework required for v1 — keep it lightweight; only reach for a bundler if a library genuinely needs one. The plan for Transformers.js is to vendor its prebuilt ESM build and load it in a module worker, with no bundler; checkpoint CP-B2 confirms whether that works |
 
 ## Repo structure (target — create as needed per phase)
 
@@ -41,6 +41,7 @@ Do not start a sub-feature not listed there without checking in first. If a sub-
 /content/                content scripts: extraction, classification, sectioning, link harvesting, highlighting
 /sidepanel/              side panel UI: thread picker, reading view, chat, picklist
 /lib/                    shared pure functions (scoring, quota allocation, cosine similarity, thread schema helpers)
+/offscreen/              offscreen document that hosts the embedding worker
 /workers/                embedding Web Worker
 /docs/master-spec.md     source of truth (this project's design doc)
 /.claude/skills/         project-specific Claude Code skills (see below)
@@ -51,8 +52,9 @@ Do not start a sub-feature not listed there without checking in first. If a sub-
 - **Pure logic before UI.** Scoring, quota allocation, breakpoint detection, and thread-attachment logic should be written as plain testable functions in `/lib/`, independent of DOM/Chrome APIs, so they can be unit tested without a browser.
 - **No silent scope creep.** If a sub-feature implementation reveals a gap in the spec (e.g. an edge case in quota backfill not covered), stop and note it rather than inventing new behavior.
 - **Free-tier discipline.** Don't introduce a paid API or a hosted backend without flagging it — the whole point of this project is a free, mostly client-side stack (see spec §1 and §3.6).
-- **Test each sub-feature in isolation** per the spec's phase breakdown (§6) before wiring it into the next phase. Don't jump ahead to chat/agent wiring before extraction+sectioning+retrieval are independently verified.
-- **Manifest V3 permissions**: request the minimum host permissions needed per phase; don't request broad `<all_urls>` access until link-crawling (phase 9) actually needs it.
+- **Test each sub-feature in isolation** per the spec's phase breakdown (§6) before wiring it into the next phase. Don't jump ahead to chat/agent wiring before extraction+sectioning+retrieval are independently verified. **Approved exception (spec §6a):** phases 2–4 get one combined test run at the end of phase 4, gated by per-phase checkpoints. That isn't a violation, but phase 5 must not start until that combined run is ticked off.
+- **Section locations are text-quote anchors, not stored `Range`s** (spec §3.2). Live `Range`s exist only inside the content script and are rebuilt from anchors.
+- **Manifest V3 permissions**: request the minimum host permissions needed per phase; don't request broad `<all_urls>` access until link-crawling (phase 9) actually needs it. Approved so far: `activeTab`, `scripting`, `sidePanel`, `storage`, plus `offscreen` and `'wasm-unsafe-eval'` in the extension-pages CSP, both from phase 2 (spec §7.1).
 
 ## Skills
 

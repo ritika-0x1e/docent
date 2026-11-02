@@ -11,7 +11,7 @@ Implements master-spec §3.2 (sub-features B1–B3). The core rule: LLM calls ha
 
 If the extracted article contains `h1`–`h4` elements:
 1. Split content at each heading.
-2. For each resulting section, capture and store the DOM `Range` spanning that section's content (needed later for citation highlighting — see the `citation-highlighting` skill). Do this at extraction time, before any navigation or DOM mutation can invalidate the range.
+2. For each block (paragraph, list, heading…) in the section, compute a text-quote anchor `{exact, prefix, suffix}` by matching the block's text against the live page, and keep the resulting live `Range` in the content script's in-memory map (`globalThis.__summarizerRanges`). Only the anchors leave the content script. `Range`s can't be messaged or persisted, and a heading-to-heading `Range` would also cover the boilerplate between paragraphs (master-spec §3.2). Unmatched blocks are marked `anchored: false`, never treated as errors.
 3. Use the heading's own text as the section heading; no generation needed for this case.
 
 ## Unstructured case (B2)
@@ -23,7 +23,8 @@ If no usable headings exist:
 4. For each new paragraph, compute cosine similarity between its embedding and the running centroid.
 5. If similarity drops below a threshold, close the current section and start a new one with this paragraph as the first member of the new running centroid.
 6. Threshold is a tunable constant — start with a reasonable default and expose it as a config value rather than hardcoding it deep in the function, since it will likely need adjustment once tested against real pages.
-7. Capture the DOM `Range` for each resulting section the same way as the structured case.
+7. Anchor each block the same way as the structured case. Anchoring runs on blocks before either path, so both share it.
+8. Embeddings come from the worker hosted in the offscreen document (master-spec §7.1). They're used only to find boundaries and are not stored; Phase C embeds section chunks separately for retrieval.
 
 ## Heading + summary generation (B3)
 
@@ -37,14 +38,18 @@ Only runs after B1 or B2 has produced fixed section boundaries.
 
 ```
 Section {
-  id,
-  heading,        // from HTML or generated
-  summary,        // generated
+  id,               // "s<index>", unique within the page
+  heading,          // from HTML, generated, or fallback text if the LLM step failed
+  headingSource,    // "html" | "generated" | "fallback"
+  headingPath,      // ancestor headings (structured case); [] otherwise
+  summary,          // generated one-liner, or null
   text,
-  domRange,       // for live highlighting
-  paragraphIndices // for debugging/traceability back to source
+  method,           // "headings" | "semantic"
+  blocks: [ { id, anchor: {exact, prefix, suffix}, anchored } ]  // replaces domRange; live Ranges stay in the content script
 }
 ```
+
+Full details, thresholds and batching rules: `docs/phased-implementation-plan/phase-B-sectioning.md`.
 
 ## Non-goals
 
