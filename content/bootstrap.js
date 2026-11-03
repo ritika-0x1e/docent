@@ -3,32 +3,98 @@
 // "injection blocked outright" from "injected but broke before it could respond"
 // (e.g. a Trusted Types violation) — background times out waiting for this if it never arrives.
 //
-// A1/A2 orchestration also lives here for now, since there's no side panel (I1) yet to own it.
+// The DOM-bound half of the pipeline runs here: source detection (A5), extraction (A1/A5),
+// classification (A2), blocks + anchoring and the B1 heading split. B2 (embeddings) and B3 (LLM)
+// run in the background, which needs only the blocks returned from here.
+
+async function extractBlocks(source) {
+  if (source.kind === "gdocs") {
+    const { title, blocks } = await extractGoogleDoc(source.docs);
+    return { title, excerpt: null, blocks, measurements: measureBlocks(blocks), articleChars: null };
+  }
+  if (source.kind === "markdown") {
+    const { title, blocks } = extractMarkdown();
+    return { title, excerpt: null, blocks, measurements: measureBlocks(blocks), articleChars: null };
+  }
+  const article = extractArticle();
+  return {
+    title: article?.title ?? document.title,
+    excerpt: article?.excerpt ?? null,
+    blocks: parseBlocks(article?.content),
+    measurements: measurePage(article),
+    articleChars: normalizeText(article?.textContent || "").length,
+  };
+}
+
+async function handleScan(message) {
+  const source = detectSource();
+  const t0 = performance.now();
+
+  let extracted;
+  try {
+    extracted = await extractBlocks(source);
+  } catch (err) {
+    if (err instanceof SourceError) return { status: "source-error", source: source.kind, reason: err.reason, error: err.message };
+    throw err;
+  }
+  const { title, excerpt, blocks, measurements, articleChars } = extracted;
+  const classifyResult = classifyPage(measurements);
+  const article = { title, excerpt };
+
+  if (!message.force && classifyResult.classification !== "text") {
+    return { status: "needs-force-scan", source: source.kind, article, classifyResult };
+  }
+
+  const t1 = performance.now();
+  const anchored = source.kind === "gdocs" ? skipAnchoring(blocks) : anchorBlocks(blocks);
+  const t2 = performance.now();
+
+  // B1 here; null means fewer than 2 headings and the background runs B2 on the blocks.
+  const sections = splitByHeadings(anchored);
+  if (sections && source.kind === "gdocs") addOutlineJumps(sections, anchored);
+
+  const blockChars = blocks.reduce((n, b) => n + b.text.length, 0);
+  return {
+    status: "ok",
+    source: source.kind,
+    article,
+    classifyResult,
+    blocks: anchored,
+    sections,
+    stats: {
+      blocks: blocks.length,
+      anchoredExact: anchored.filter((b) => b.match === "exact").length,
+      anchoredEdges: anchored.filter((b) => b.match === "edges").length,
+      unanchored: anchored.filter((b) => !b.anchored).length,
+      anchoringSkipped: source.kind === "gdocs",
+      // Share of Readability's text that landed in some block; low values mean blocks.js misses content.
+      blockCoverage: articleChars ? blockChars / articleChars : null,
+      msExtract: Math.round(t1 - t0),
+      msAnchoring: Math.round(t2 - t1),
+    },
+  };
+}
 
 (function bootstrap() {
   try {
     chrome.runtime.sendMessage({ type: "ready" });
 
+    const handlers = {
+      scan: handleScan,
+      "highlight-blocks": (message) => debugHighlight(message.blockIds),
+      "jump-to-outline-heading": (message) => jumpToOutlineHeading(message.jump),
+      "clear-highlight": () => (clearDebugHighlight(), { ok: true }),
+    };
+
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      if (message?.type !== "scan") return; // not ours to handle
+      const handler = handlers[message?.type];
+      if (!handler) return; // not ours to handle
 
-      try {
-        const article = extractArticle();
-        const measurements = measurePage(article);
-        const classifyResult = classifyPage(measurements);
+      Promise.resolve()
+        .then(() => handler(message))
+        .then(sendResponse, (err) => sendResponse({ status: "error", error: String(err && err.message ? err.message : err) }));
 
-        const proceed = message.force || classifyResult.classification === "text";
-
-        sendResponse({
-          status: proceed ? "ok" : "needs-force-scan",
-          article: article ? { title: article.title, textContent: article.textContent, excerpt: article.excerpt } : null,
-          classifyResult,
-        });
-      } catch (err) {
-        sendResponse({ status: "error", error: String(err && err.message ? err.message : err) });
-      }
-
-      return true; // keep the message channel open in case sendResponse is deferred by an engine quirk
+      return true; // response is async (the Google Docs export fetch)
     });
 
     // Read by background's isAlreadyInjected() so repeat scans on this page skip re-injection.

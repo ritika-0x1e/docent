@@ -161,7 +161,8 @@ I1 (side panel shell) isn't built until phase 4. To test A1–A4 in isolation no
 ### Test log (2026-11-01, manual harness runs)
 
 - **Unit tests**: `npm test` — 6/6 pass.
-- **A1 headed docs page**: "PSBA Terms of Reference" → `text`, 228 words (only just above the 175 floor).
+- ~~**A1 headed docs page**: "PSBA Terms of Reference" → `text`, 228 words (only just above the 175 floor).~~ **Not a valid result** (corrected 2026-11-03): this was a Google Doc, whose body is canvas-rendered, so Readability extracted only the sidebar outline. Google Docs now has its own extraction path (A5a, `phase-A5-special-sources.md`), which gets 10,384 words from the same doc.
+- **A1 headed docs page (re-test)**: several ordinary HTML articles with headings extracted correctly, and their headings were later confirmed by Phase B's heading split (CP-B1). This is the real pass for this criterion.
 - **A1 blog**: "How to Structure Your Blog Posts with Subheadings" → `text`, 850 words (this post likely has headings, so headingless was re-tested below).
 - **A1 headingless essays** (paulgraham.com, legacy table/`<font>`/`<br>` markup): "Making Startups Powerful" → `text`, 2907 words; "How to Do Great Work" → `text`, 11619 words. Readability handles the legacy layout fine — B1's no-heading breakpoint path has valid input. (paulgraham.com homepage → `sparse`, 19 words — correct, it's an image-link index.)
 - **A1 JS-heavy SPA**: Reddit's "Reddit Rules" page → `text`, 244 words. Correct page extracted.

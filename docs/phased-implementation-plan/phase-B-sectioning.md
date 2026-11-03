@@ -64,7 +64,11 @@ Loading: content scripts and the service worker stay **classic scripts**. The se
 
 ## Blocks (shared input for B1 and B2)
 
-`content/blocks.js` parses Readability's `article.content` with `DOMParser`. This creates an inert document that touches neither the live page nor Trusted Types sinks. It walks the result into an ordered list of blocks:
+`content/blocks.js` walks Readability's content element into an ordered list of blocks.
+
+> **As implemented:** `extract.js` passes Readability `serializer: el => el`, so `article.content` is the content element from the detached clone, not an HTML string. That removes the need for `DOMParser` and any HTML re-parsing, which would be a Trusted Types sink on strict pages. Until B2 exists (build step 4), pages with fewer than 2 headings come back as one section per block (`method: "unsplit"`), so CP-B1 can still check anchoring on headingless pages.
+
+The block rules:
 
 - **Heading**: `h2`–`h4`, stored with its `level`. Readability renames `h1` to `h2` in its output, and the page title comes separately as `article.title`. In practice that means the spec's "h1–h4" maps to `h2`–`h4` here.
 - **Paragraph-like**: `p`, `pre`, `blockquote`, `table`, `figcaption`. Each one becomes a single block.
@@ -102,7 +106,9 @@ Not handled (noted for tuning, not built): a single huge headed section isn't su
 
 ## B2 — Centroid breakpoint detection
 
-**Embedding (minimal C1).** `workers/embed-worker.js` loads `Xenova/all-MiniLM-L6-v2` (quantized) through Transformers.js `pipeline("feature-extraction")` with `{pooling: "mean", normalize: true}`, which gives 384-dim unit vectors. The pipeline is loaded once and reused for the life of the offscreen document. `background/offscreen-client.js` creates the offscreen document on demand and messages `{texts}` → `{vectors}`. Exact library and model versions are pinned when vendored. Text over the model's token limit is truncated by the tokenizer, which is acceptable for boundary detection.
+**Embedding (minimal C1).** `workers/embed-worker.js` loads `Xenova/all-MiniLM-L6-v2` (quantized) through Transformers.js `pipeline("feature-extraction")` with `{pooling: "mean", normalize: true}`, which gives 384-dim unit vectors. The pipeline is loaded once and reused for the life of the offscreen document. `background/offscreen-client.js` creates the offscreen document on demand and messages `{texts}` → `{vectors}`. Exact library and model versions are pinned when vendored.
+
+> **As implemented (build step 3):** Transformers.js **4.3.1** (`dist/transformers.min.js`, ONNX Runtime bundled), plus `onnxruntime-web` **1.31.0-dev.20260914-8d85527a0** wasm files. It uses the plain CPU `ort-wasm-simd-threaded` build (14 MB) instead of v4's default `.asyncify` build (27 MB, only needed for WebGPU), single-threaded, because extension pages aren't cross-origin isolated. Details: `workers/vendor/VENDORED.md`. Text over the model's token limit is truncated by the tokenizer, which is acceptable for boundary detection.
 
 **Breakpoints.** `lib/breakpoints.js`, `detectBreakpoints(embeddings, wordCounts, opts)`, pure. It returns the block indices where a new section starts.
 
@@ -120,6 +126,7 @@ Embeddings computed here are **not** stored. C2 owns storage, and the section-le
 - **Batched**, not one call per section. The Gemini free tier is rate-limited per minute, and an 11k-word essay can produce 20+ sections. Up to 8 sections go in one request, each truncated to ~400 words. Batches run sequentially. Each section is still summarized on its own text only, never the whole page, as the skill requires.
 - Requests use JSON structured output (`responseMimeType: "application/json"` plus a response schema): an array of `{id, heading, summary}`. For sections whose heading came from the HTML, only `summary` is requested and used.
 - Model: Gemini Flash (free tier), kept as one constant in `llm.js`. The current model ID is verified against Google's docs when this is implemented, not guessed now.
+  > **As implemented:** `gemini-3.6-flash`, marked stable on Google's model list (checked 2026-11-03). The `gemini-flash-latest` alias was rejected because it's swapped to each new release. The list doesn't say which models are on the free tier; confirm when setting up the key. A 429 is retried once only if the suggested wait is ≤ 20 s, because an idle service worker can be stopped after ~30 s.
 - **Never blocks the pipeline.** On a missing key, a network error, malformed output, or a 429 that is still failing after one retry (which honours the retry delay), the affected sections get a fallback heading (first ~8 words + "…") and `summary: null`, and the harness logs why.
 - **API key**: kept in `chrome.storage.local` under `geminiApiKey`. For this phase it's set from the service-worker console via `setGeminiKey("…")`; a settings UI comes with the side panel. It is never committed or logged.
 - **Host access**: the call is first tried with no host permission, since the Gemini REST API returns CORS headers. If the service worker is blocked anyway, the fallback is one narrow static host permission for `generativelanguage.googleapis.com`, the same pattern §7.1 uses for DuckDuckGo. That fallback gets noted in §7.1 if it's needed.
@@ -141,6 +148,8 @@ Section {
   blocks: [ { id, anchor: {exact, prefix, suffix}, anchored } ]  // replaces domRange; live Ranges stay in the content script
 }
 ```
+
+> **As implemented (build steps 4–5):** the content script does extraction, blocks, anchoring and B1, and returns `sections: null` when there are fewer than 2 headings. The background then runs B2 (`background/sectioning.js`) and B3 (`background/llm.js`) and assembles the final shape (`lib/sections.js`). The finished sections are stored in `chrome.storage.session` under `scan:<tabId>`, so the console helpers keep working after the service worker restarts. The interim `"unsplit"` mode from step 2 is gone.
 
 ## Test harness (extends Phase A's)
 
@@ -171,8 +180,8 @@ This is still scaffolding and gets replaced by H2/I2 in phase 4.
 
 You run these right after the build step named; the rest of the manual test plan above waits for the combined run.
 
-- [ ] **CP-B1, after build step 2 (anchoring + B1).** Reload the extension, scan the headed docs page and one Paul Graham essay, and run `highlightSection(tabId, i)` on 2–3 sections each. Pass: the right paragraphs are highlighted, and the logged anchoring rate is ≥ 90%. *Why now:* every citation highlight later depends on this, and a miss here would be hard to separate from C or side-panel bugs in a combined run.
-- [ ] **CP-B2, after build step 3 (offscreen + worker).** Run `await embed(["hello world", "goodbye"])` in the service-worker console. Pass: two arrays of length 384, and on a second call after an extension reload, no model download in the Network tab. *Why now:* the offscreen document, wasm CSP and model download are browser-environment concerns no unit test covers, and B2, all of C, and phase 4 retrieval sit on top of them.
+- [x] **CP-B1, after build step 2 (anchoring + B1).** Reload the extension, scan the headed docs page and one Paul Graham essay, and run `highlightSection(tabId, i)` on 2–3 sections each. Pass: the right paragraphs are highlighted, and the logged anchoring rate is ≥ 90%. *Why now:* every citation highlight later depends on this, and a miss here would be hard to separate from C or side-panel bugs in a combined run.
+- [x] **CP-B2, after build step 3 (offscreen + worker).** Run `await embed(["hello world", "goodbye"])` in the service-worker console. Pass: two arrays of length 384, and on a second call after an extension reload, no model download in the Network tab. *Why now:* the offscreen document, wasm CSP and model download are browser-environment concerns no unit test covers, and B2, all of C, and phase 4 retrieval sit on top of them.
 
 Everything else (B2 threshold tuning, B3 output quality, LLM fallback) is checked in the combined run.
 
@@ -196,4 +205,4 @@ Each step is testable before the next starts:
 4. B2 (`lib/vector.js`, `lib/breakpoints.js`). Verify on headingless pages, tuning the threshold.
 5. B3 (`lib/section-prompt.js`, `background/llm.js`). Verify with and without a valid key.
 
-Once unit tests pass and CP-B1/CP-B2 pass, move to Phase C (`phase-C-embeddings-retrieval.md`). C1's worker already exists by then, so C covers section-level embeddings, C2 storage and C3 retrieval.
+Once unit tests pass and CP-B1/CP-B2 pass, build A5 (`phase-A5-special-sources.md`: Google Docs + raw Markdown), then Phase C (`phase-C-embeddings-retrieval.md`). C1's worker already exists by then, so C covers section-level embeddings, C2 storage and C3 retrieval.

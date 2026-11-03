@@ -8,7 +8,9 @@
 
 function extractArticle() {
   const clone = document.cloneNode(true);
-  const reader = new Readability(clone);
+  // serializer: return the content element itself rather than an HTML string, so B1 can walk
+  // blocks directly — no re-parsing HTML, which would be a Trusted Types sink on strict pages.
+  const reader = new Readability(clone, { serializer: (el) => el });
   const article = reader.parse(); // null if Readability can't find enough to work with
   return article;
 }

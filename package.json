@@ -4,6 +4,7 @@
   "private": true,
   "description": "Chrome extension: scoped RAG chatbot over the current tab's content.",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "vendor": "node scripts/vendor.mjs"
   }
 }

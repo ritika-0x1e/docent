@@ -46,8 +46,11 @@ Section {
   text,
   method,           // "headings" | "semantic"
   blocks: [ { id, anchor: {exact, prefix, suffix}, anchored } ]  // replaces domRange; live Ranges stay in the content script
+  jump,             // {kind: "gdocs-outline", headingText, occurrence} | null — for sources that can't be highlighted live
 }
 ```
+
+Blocks can come from three sources (A5): Readability on a normal page, a Google Docs HTML export (no anchoring; `jump` targets the heading's entry in the doc's outline sidebar), or raw Markdown (anchored on `anchorText`, the raw source lines). Sectioning logic is the same for all three. See `docs/phased-implementation-plan/phase-A5-special-sources.md`.
 
 Full details, thresholds and batching rules: `docs/phased-implementation-plan/phase-B-sectioning.md`.
 

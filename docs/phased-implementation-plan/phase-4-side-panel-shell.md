@@ -104,7 +104,7 @@ idle (not scanned) ─Start scan─► scanning(stage) ─┬─► ready(sectio
 
   *Why now:* if this fails, the scan flow, error messages and possibly the manifest change, and building the rest of the panel first would mean redoing it.
 
-## Combined test run: phases B + C + 4
+## Combined test run: phases B + A5 + C + 4
 
 Run after phase 4 is built. Tick the matching exit criteria in each phase doc as you go. Use the same pages as before: the headed docs page, the "Subheadings" blog, two Paul Graham essays, the Git-questions SPA article, YouTube (sparse) and `chrome://extensions`.
 
@@ -128,17 +128,24 @@ Run after phase 4 is built. Tick the matching exit criteria in each phase doc as
 11. Repeat CP-C1's three question types on a headingless essay, via the find-sections box or `query()`.
 12. Reload the extension, then reopen the panel: corpora persist, as `listCorpora()` shows.
 
+**Special sources (A5)**
+
+13. Google Doc: sections match the doc's headings, the word count is realistic (not just the outline), and there's no highlight. In the find-sections box, clicking a result shows the snippet and runs **Jump to section**, which scrolls the doc to that heading.
+14. Google Doc with no headings, or the intro section: snippet only, no jump button.
+15. Raw `.md` file (e.g. a `raw.githubusercontent.com` README): splits on `#` headings, and clicking a find-sections result highlights the right lines.
+16. Rendered GitHub README: works through the normal path, with highlights.
+
 **Housekeeping**
 
-13. `manifest.json` contains only the approved permissions: `activeTab`, `scripting`, `sidePanel`, `storage`, `offscreen`, the wasm CSP, plus anything decision 1(a) or the Gemini CORS fallback added. No broad host permissions.
-14. `npm test` passes for everything.
+17. `manifest.json` contains only the approved permissions: `activeTab`, `scripting`, `sidePanel`, `storage`, `offscreen`, the wasm CSP, plus anything decision 1(a) or the Gemini CORS fallback added. No broad host permissions.
+18. `npm test` passes for everything.
 
 ## Exit criteria for phase 4
 
 - [ ] `lib/panel-state.js` unit tests pass
 - [ ] CP-4-1 passes (or its chosen fallback works)
 - [ ] Combined test run items 1–6 pass
-- [ ] Phase B and Phase C exit criteria all ticked via the combined run
+- [ ] Phase B, A5 and Phase C exit criteria all ticked via the combined run
 
 ## Build order inside the phase
 

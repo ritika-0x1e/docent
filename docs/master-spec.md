@@ -55,6 +55,13 @@ No dedicated backend server is required for v1. A Cloudflare Workers free-tier p
 - If text is too sparse (~<150–200 words) and the page is media-dominated: **don't silently proceed** — show a banner ("not enough text detected") with a **force-scan** override button. However small the text, the user can still force it through.
 - If the content script can't attach at all (strict CSP, Trusted Types, permission-blocked sites) — detect this and clearly say "this site restricts extension access," never fail silently.
 
+### 3.1a Special sources: Google Docs & raw Markdown (decided 2026-11-03, sub-feature A5)
+- **Google Docs** draws its body on a canvas, so the page's HTML only holds the sidebar outline. Instead of Readability, the content script fetches Docs' own HTML export (`/document/d/<id>/export?format=html`). It's same-origin, so it uses the user's login, needs no new permissions, and needs no Google API/OAuth. The export's real headings feed B1 directly. If the export fails (e.g. the owner disabled downloading), show a dedicated "couldn't read this Google Doc" message, distinct from A4.
+- **Citations for Google Docs:** no live highlight is possible. Show a **snippet** (quoted text + heading) and a **Jump to section** action that clicks that heading's entry in the live doc's **outline sidebar**, which scrolls the doc there. (Changed 2026-11-03 during CP-A5-1: the export has no heading ids and outline clicks don't expose one, so `#heading=` URLs aren't possible. The approved behaviour is unchanged.)
+- **Raw Markdown files** (shown by Chrome as plain text): parse `#`/setext headings, paragraphs, lists and code fences into blocks with a small built-in parser. The text is real DOM text, so anchoring and **live highlighting work as on normal pages**.
+- **Rendered Markdown** (GitHub/GitLab views, docs sites) is ordinary HTML and uses the normal path.
+- Plan: `docs/phased-implementation-plan/phase-A5-special-sources.md`.
+
 ### 3.2 Sectioning
 - **Structured case**: split on existing `h1–h4`, and keep each section's location for later highlighting. (Readability renames `h1` to `h2` in its output, so in practice this is `h2`–`h4`.)
 - **Section location = per-block text-quote anchors, not one `Range`** (decided in Phase B planning, 2026-11-02). Each paragraph-level block in a section stores `{exact, prefix, suffix}`. Live `Range`s are rebuilt from these anchors inside the content script and never stored. A single heading-to-heading `Range` would also highlight the boilerplate Readability stripped between paragraphs. A `Range` also can't be messaged out of the content script or persisted, and F3 has to re-highlight a page after reload. The CSS Custom Highlight API accepts multiple ranges per highlight, so §3.8 is unaffected.
@@ -100,6 +107,7 @@ Revised approach:
 - Use the **CSS Custom Highlight API** (`Highlight`, `CSS.highlights.set()`) to highlight the cited `Range` on the *live* page — non-destructive, no span-wrapping, doesn't fight the host page's own scripts/DOM state.
 - If the cited section's source page is the currently open tab → highlight live.
 - If the cited section came from a different page in the thread (crawled but not open) → show as a snippet + page badge with an "open page and highlight" action, rather than trying to highlight a page that isn't rendered.
+- If the cited section is from a **Google Doc** (§3.1a), whether open or not → snippet + page badge + **Jump to section** (opens the doc at that heading); never a live highlight. Sections without a heading id (intro, or B2-split) are snippet-only.
 
 ### 3.9 Web search fallback (decided: redirect-only, no crawling of results)
 - No paid API needed. Background service worker does a plain `fetch()` against DuckDuckGo's HTML endpoint (`html.duckduckgo.com/html/`) — lighter than Google's SERP, no JS requirement. Flagged as unofficial/could break if DDG changes markup; Brave Search API (small free tier) is the fallback if so.
@@ -167,6 +175,7 @@ Each item below should be buildable and testable in isolation before integration
 - **A2.** Text vs. media classification heuristic (char count vs. media pixel area)
 - **A3.** "Not enough text" banner + force-scan override
 - **A4.** CSP/injection-failure detection + "site restricts access" message
+- **A5.** Special sources (§3.1a): **A5a** Google Docs via HTML export + jump-to-heading via the doc's outline sidebar; **A5b** raw Markdown parsing into blocks
 
 ### B. Sectioning
 - **B1.** Heading-based split (h1–h4) with per-block text-quote anchors (live `Range`s rebuilt from them; see §3.2)
@@ -223,6 +232,7 @@ Recommended build sequence — each phase should be functional and testable befo
 
 1. **A** — Extraction, classification, force-check banner (gates everything downstream)
 2. **B** — Sectioning + heading/summary generation (no chat yet). The minimal C1 embedding worker is built here, since B2 can't work without embeddings. The static reading view is deferred to I2 in step 4, because it needs the side panel; B is verified through the console harness until then.
+2a. **A5** — Special sources: Google Docs export and raw Markdown (§3.1a). Built after B is complete, because it produces B's block list, and before C. Covered by the combined run (§6a).
 3. **C** — Local embeddings + retrieval, tested standalone ("show top 5 sections for this query"). C1's worker already exists from step 2.
 4. **H1, H2 (partial), I1, I2** — Side panel shell with scan button wired to A+B+C for a single page, no threads yet. The chat area temporarily holds a "find sections" search box (top-5 retrieval results, click to highlight) so retrieval can be tested through the UI; it's removed when I3 lands in step 6 (decided 2026-11-03).
 5. **G1, G2, G3, H3, H4** — Thread persistence and the full scan-button behavior matrix, still single-page corpora
@@ -238,7 +248,7 @@ Per-phase plans live in `docs/phased-implementation-plan/`, one file per phase.
 ## 6a. Testing strategy (decided 2026-11-02)
 
 - **Default:** each phase is fully tested on its own before the next starts.
-- **Exception: phases 2, 3 and 4 (B, C, side panel shell) are built back to back and fully tested in one combined run at the end of phase 4.**
+- **Exception: phases 2, 2a, 3 and 4 (B, A5, C, side panel shell) are built back to back and fully tested in one combined run at the end of phase 4.**
   - Each of those phase plans lists **checkpoints**: a few quick manual tests that must pass before moving to the next phase. They cover browser-environment failures that unit tests can't catch and that everything later builds on: anchoring, the embedding worker loading, retrieval sanity, persistence, and side-panel tab access.
   - Unit tests for `lib/` still run in every phase.
   - The combined checklist is in `phase-4-side-panel-shell.md`.

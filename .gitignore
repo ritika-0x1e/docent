@@ -1,0 +1,4 @@
+node_modules/
+
+# 14 MB ONNX Runtime binary — restored by `npm run vendor` (see workers/vendor/VENDORED.md)
+workers/vendor/transformers/ort-wasm-simd-threaded.wasm

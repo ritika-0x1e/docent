@@ -17,14 +17,14 @@ Do not start a sub-feature not listed there without checking in first. If a sub-
 
 ## Current phase
 
-**Phase A (extraction & classification): done and tested.** Next: phases 2–4 (B sectioning, C embeddings/retrieval, side panel shell), built back to back under the combined-testing exception in `docs/master-spec.md` §6a. Per-phase plans are in `docs/phased-implementation-plan/`. Before starting any phase, check that plan's **checkpoints** and its "decisions needing sign-off" section. Remind the user to run any checkpoint left unticked, or the combined run if it's still pending, before building further. Work sub-feature by sub-feature in the order given in `docs/master-spec.md` §6.
+**Phase A (extraction & classification): done and tested.** Next: phases 2–4 (B sectioning, then A5 special sources (Google Docs export + raw Markdown, spec §3.1a), then C embeddings/retrieval, then the side panel shell), built back to back under the combined-testing exception in `docs/master-spec.md` §6a. Per-phase plans are in `docs/phased-implementation-plan/`. Before starting any phase, check that plan's **checkpoints** and its "decisions needing sign-off" section. Remind the user to run any checkpoint left unticked, or the combined run if it's still pending, before building further. Work sub-feature by sub-feature in the order given in `docs/master-spec.md` §6.
 
 ## Tech stack (do not substitute without discussion)
 
 | Layer | Choice |
 |---|---|
 | Extension platform | Chrome Manifest V3, `chrome.sidePanel` |
-| Content extraction | Readability.js |
+| Content extraction | Readability.js for normal pages; Google Docs via its own HTML export (same-origin fetch, no API/OAuth); raw Markdown via a small built-in parser (spec §3.1a) |
 | Sectioning | Custom heuristics (heading split) + embedding-based centroid breakpoint detection for unstructured pages |
 | Embeddings | Transformers.js, `all-MiniLM-L6-v2`, quantized, run in a Web Worker hosted by an offscreen document (MV3 service workers can't spawn workers). Library + wasm vendored; model weights downloaded on first use and cached (spec §7.2) |
 | Vector storage | IndexedDB (raw cosine similarity, no external vector DB — page-scale doesn't need one) |
