@@ -10,6 +10,8 @@ MV3 forbids remotely hosted code, so these are copied in at pinned versions. Mod
 
 The plain `ort-wasm-simd-threaded` build (14 MB, CPU only) is used instead of the `.asyncify` build Transformers.js v4 loads by default (27 MB, needed only for WebGPU). `workers/embed-worker.js` points `env.backends.onnx.wasm.wasmPaths` at it.
 
-**The `.wasm` file is not in git** (14 MB; see `.gitignore`). After cloning, run `npm run vendor` to download it at the pinned version. `scripts/vendor.mjs` holds the same version number as the table above, so keep them in sync.
+**`transformers.min.js` and the `.wasm` file are not in git** (see `.gitignore`). After cloning, run `npm run vendor` to download both at their pinned versions. The extension won't embed anything until you do. `scripts/vendor.mjs` holds the same version numbers as the table above, so keep them in sync.
+- The `.wasm` is 14 MB.
+- `transformers.min.js` is kept out because GitHub's secret scanning reports a "Mistral AI API key" in it (2026-11-03). It's a false positive: the match is a 32-character model class name / gist id in the minified code. The file is byte-identical to the npm release.
 
 When upgrading, take both from matching versions: check `onnxruntime-web` in the new Transformers.js `package.json`.

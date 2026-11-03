@@ -26,7 +26,7 @@ Do not start a sub-feature not listed there without checking in first. If a sub-
 | Extension platform | Chrome Manifest V3, `chrome.sidePanel` |
 | Content extraction | Readability.js for normal pages; Google Docs via its own HTML export (same-origin fetch, no API/OAuth); raw Markdown via a small built-in parser (spec §3.1a) |
 | Sectioning | Custom heuristics (heading split) + embedding-based centroid breakpoint detection for unstructured pages |
-| Embeddings | Transformers.js, `all-MiniLM-L6-v2`, quantized, run in a Web Worker hosted by an offscreen document (MV3 service workers can't spawn workers). Library + wasm vendored; model weights downloaded on first use and cached (spec §7.2) |
+| Embeddings | Transformers.js, `all-MiniLM-L6-v2`, quantized, run in a Web Worker hosted by an offscreen document (MV3 service workers can't spawn workers). Library + wasm vendored but not committed: `npm run vendor` fetches them at pinned versions after cloning (`workers/vendor/VENDORED.md`); model weights downloaded on first use and cached (spec §7.2) |
 | Vector storage | IndexedDB (raw cosine similarity, no external vector DB — page-scale doesn't need one) |
 | LLM | Gemini Flash (free tier) via direct API calls from the background service worker; local Ollama as a documented fallback if quota becomes a real constraint (not built yet — see spec §3.6 and sub-feature E5) |
 | Web search | Plain `fetch()` against DuckDuckGo's HTML endpoint, no API key; Brave Search API as a fallback path if DDG markup drifts |

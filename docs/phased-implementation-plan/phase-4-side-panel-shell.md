@@ -127,7 +127,7 @@ Run after phase 4 is built. Tick the matching exit criteria in each phase doc as
 1. ✅ The toolbar click opens the panel, and nothing scans until Start scan. *(Passed 2026-11-03.)*
 2. ✅ Headed docs page: progress stages show, sections appear, then summaries fill in. *(Passed 2026-11-03 on Wikipedia "History of cricket to 1725". Stages and progressive cards worked. Gemini returned 503 "high demand" for both batches; the scan still finished and the B3 warning banner showed. B3 now retries once on 503 as well as 429. Summary quality is checked in item 10.)*
 3. ✅ YouTube: A3 banner, then **Force scan anyway** runs. *(Passed 2026-11-03 on a video page: banner shown, and the forced scan gave 2–3 sections. The YouTube **home page** got no banner: its list of video titles clears the 175-word minimum. The user wants listing pages like that treated as "not enough content". **Fixed the same day** with the A2 link-density rule (master-spec §3.1). On recheck, the home page shows the "list of links" banner and force scan works, while Wikipedia still scans with no banner.)*
-4. `chrome://extensions`: the restricts-access message.
+4. ✅ `chrome://extensions`: the restricts-access message. *(Passed 2026-11-03.)*
 5. Switching tabs shows the other tab's state; switching back shows the earlier sections; navigating resets to "not scanned".
 6. Closing the panel mid-scan, then calling `listCorpora()`, shows the corpus was still saved.
 

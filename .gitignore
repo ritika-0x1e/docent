@@ -1,4 +1,6 @@
 node_modules/
 
-# 14 MB ONNX Runtime binary — restored by `npm run vendor` (see workers/vendor/VENDORED.md)
+# Third-party builds restored by `npm run vendor` (see workers/vendor/VENDORED.md):
+# the 14 MB ONNX Runtime binary, and Transformers.js (its minified model names trip GitHub secret scanning)
 workers/vendor/transformers/ort-wasm-simd-threaded.wasm
+workers/vendor/transformers/transformers.min.js
