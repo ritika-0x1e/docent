@@ -11,8 +11,14 @@ importScripts(
   "../lib/breakpoints.js",
   "../lib/sections.js",
   "../lib/section-prompt.js",
+  "../lib/chunk.js",
+  "../lib/retrieval.js",
+  "vendor/idb.js",
   "sectioning.js",
-  "llm.js"
+  "llm.js",
+  "embedder.js",
+  "store.js",
+  "retriever.js"
 );
 
 const HANDSHAKE_TIMEOUT_MS = 2000;
@@ -124,11 +130,38 @@ async function runPipeline(tabId, { force = false, llm = true } = {}) {
     b2 = await sectionSemantically(response.blocks);
     raw = b2.sections;
   }
-  const b3 = await labelSections(finalizeSections(raw, response.blocks), response.article.title, { llm });
+  const finalized = finalizeSections(raw, response.blocks);
+
+  // B3 and C1 run in parallel: chunk text uses only HTML headings, never generated ones.
+  const [b3, embedded] = await Promise.all([
+    labelSections(finalized, response.article.title, { llm }),
+    embedSectionChunks(finalized),
+  ]);
 
   const tab = await chrome.tabs.get(tabId);
-  await chrome.storage.session.set({ [`scan:${tabId}`]: { url: tab.url, source: response.source, sections: b3.sections } });
-  return { ...scan, sections: b3.sections, b2Stats: b2?.stats ?? null, b3Stats: b3.stats };
+  let corpusId = null;
+  let storeError = null;
+  try {
+    corpusId = await saveCorpus({
+      url: tab.url,
+      title: response.article.title,
+      source: response.source,
+      embeddingModel: embedded.stats.model,
+      sections: b3.sections,
+      chunks: embedded.chunks,
+    });
+  } catch (err) {
+    storeError = err.message; // sections stay usable in session storage; only persistence failed
+  }
+
+  await chrome.storage.session.set({ [`scan:${tabId}`]: { url: tab.url, source: response.source, corpusId, sections: b3.sections } });
+  return {
+    ...scan,
+    sections: b3.sections,
+    b2Stats: b2?.stats ?? null,
+    b3Stats: b3.stats,
+    cStats: { corpusId, storeError, chunks: embedded.chunks.length, ...embedded.stats },
+  };
 }
 
 async function getLastScan(tabId) {
@@ -136,7 +169,7 @@ async function getLastScan(tabId) {
   return (await chrome.storage.session.get(key))[key] ?? null;
 }
 
-function logSections({ response, sections, b2Stats, b3Stats }) {
+function logSections({ response, sections, b2Stats, b3Stats, cStats }) {
   const { stats } = response;
   const method = sections[0]?.method ?? "none";
   const anchored = stats.anchoredExact + stats.anchoredEdges;
@@ -179,6 +212,15 @@ function logSections({ response, sections, b2Stats, b3Stats }) {
       ? "[Summarizer/B] jump to a section with: jumpTo(tabId, i)"
       : "[Summarizer/B] check a section on the page with: highlightSection(tabId, i)"
   );
+
+  if (cStats.storeError) {
+    console.error(`[Summarizer/C] corpus NOT stored: ${cStats.storeError}`);
+  } else {
+    console.log(
+      `[Summarizer/C] stored corpus ${cStats.corpusId}: ${cStats.chunks} chunks embedded in ${cStats.msEmbed}ms. ` +
+        `Ask it something with: query(tabId, "your question")`
+    );
+  }
 }
 
 async function runHarness(tabId, opts = {}) {
@@ -259,6 +301,54 @@ globalThis.findSection = async (tabId, query) => {
       };
     })
   );
+};
+
+// C3 (CP-C1): semantic retrieval over the tab's stored corpus. Works after a service-worker restart:
+// the corpus id is in session storage and everything else is in IndexedDB.
+globalThis.query = async (tabId, question, k = 5) => {
+  const scan = await getLastScan(tabId);
+  if (!scan?.corpusId) return console.warn(`[Summarizer/C] no stored corpus for tab ${tabId} — scan it first`);
+
+  const t0 = Date.now();
+  const { hits, staleCorpora } = await retrieve([scan.corpusId], question, k);
+  if (staleCorpora.length) console.warn("[Summarizer/C] corpus was embedded with a different model — re-scan it");
+  console.log(`[Summarizer/C] top ${hits.length} for "${question}" (${Date.now() - t0}ms)`);
+  console.table(
+    hits.map((h, rank) => ({
+      rank: rank + 1,
+      i: h.section.order,
+      score: h.score.toFixed(3),
+      heading: h.section.heading,
+      chunk: h.bestChunkIndex,
+      preview: h.section.text.slice(0, 80),
+    }))
+  );
+
+  // Show the top hit on the page, the same way a citation will.
+  const top = hits[0]?.section;
+  if (top?.blocks.some((b) => b.anchored)) await highlightSection(tabId, top.order);
+  else if (top?.jump) await jumpTo(tabId, top.order);
+  return hits;
+};
+
+globalThis.listCorpora = async () => {
+  const corpora = await listStoredCorpora();
+  console.table(
+    corpora.map((c) => ({
+      corpusId: c.corpusId,
+      title: c.title,
+      source: c.source,
+      sections: c.sectionCount,
+      chunks: c.chunkCount,
+      scanned: new Date(c.scannedAt).toLocaleString(),
+    }))
+  );
+  return corpora;
+};
+
+globalThis.clearCorpora = async () => {
+  await clearStoredCorpora();
+  console.log("[Summarizer/C] all stored corpora deleted");
 };
 
 globalThis.setGeminiKey = async (key) => {

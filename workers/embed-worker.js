@@ -53,7 +53,8 @@ self.onmessage = async ({ data: { id, texts } }) => {
     self.postMessage({
       id,
       vectors,
-      stats: { count: texts.length, msModelLoad: coldStart ? Math.round(t1 - t0) : 0, msEmbed: Math.round(performance.now() - t1) },
+      // model is stored with each corpus, so vectors from different models are never compared.
+      stats: { model: MODEL_ID, count: texts.length, msModelLoad: coldStart ? Math.round(t1 - t0) : 0, msEmbed: Math.round(performance.now() - t1) },
     });
   } catch (err) {
     self.postMessage({ id, error: String(err?.message ?? err) });

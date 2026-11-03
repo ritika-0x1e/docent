@@ -5,6 +5,7 @@ MV3 forbids remotely hosted code, so these are copied in at pinned versions. Mod
 | File | Source | Version | License |
 |---|---|---|---|
 | `transformers/transformers.min.js` | npm `@huggingface/transformers`, `dist/transformers.min.js` (self-contained build with ONNX Runtime bundled) | 4.3.1 | Apache-2.0 (`transformers/LICENSE.transformers`) |
+| `../../background/vendor/idb.js` | npm `idb`, `build/umd.js` (classic-script build, sets a global `idb`, so `importScripts` can load it) | 8.0.4 | ISC (`background/vendor/LICENSE.idb`) |
 | `transformers/ort-wasm-simd-threaded.mjs` + `.wasm` | npm `onnxruntime-web`, `dist/` (the exact version Transformers.js 4.3.1 depends on) | 1.31.0-dev.20260914-8d85527a0 | MIT (the package ships no LICENSE file) |
 
 The plain `ort-wasm-simd-threaded` build (14 MB, CPU only) is used instead of the `.asyncify` build Transformers.js v4 loads by default (27 MB, needed only for WebGPU). `workers/embed-worker.js` points `env.backends.onnx.wasm.wasmPaths` at it.

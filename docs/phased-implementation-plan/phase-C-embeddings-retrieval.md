@@ -84,6 +84,13 @@ Background wrapper: `retrieve(corpusIds, queryText, k)` embeds the query, loads 
 - `query(corpusId, "question", k = 5)` logs a `console.table` of `{rank, score, heading, preview}` and highlights the top hit using Phase B's `highlightSection`.
 - `listCorpora()` and `clearCorpora()` are available.
 
+> **As implemented (2026-11-03):**
+> - The helper is `query(tabId, "question", k = 5)`, not `query(corpusId, …)`. Showing the top hit needs the tab anyway, and the tab's corpus id is kept in session storage, so it works after a service-worker restart. Google Docs hits jump through the outline instead of highlighting.
+> - `idb` **8.0.4** is vendored at `background/vendor/idb.js`.
+> - The store functions are named `listStoredCorpora` / `clearStoredCorpora`, so they don't collide with the console helpers.
+> - The worker reports its model id in `stats.model`, which is stored per corpus. `retrieve()` skips corpora embedded with a different model.
+> - Section records carry an `order` field (their index in the page), because `"s10"` sorts before `"s2"` as a string.
+
 ## Test plan
 
 **Unit (`npm test`):**
@@ -94,8 +101,8 @@ Background wrapper: `retrieve(corpusIds, queryText, k)` embeds the query, loads 
 
 ## Checkpoints: test these before starting phase 4
 
-- [ ] **CP-C1: retrieval sanity on one real page.** Scan the headed docs page, then ask 3 questions with `query(...)`: one whose answer is in an early section, one in a late section, and one whose answer sits deep inside a long section. Pass: the right section is in the top 3 for all three, and the third question specifically shows that chunking works. *Why now:* if retrieval quality is wrong, the fix (chunk size, heading prefix) belongs in C. In the combined run it would look like a side-panel problem.
-- [ ] **CP-C2: data survives a service-worker restart.** After a scan, open `chrome://serviceworker-internals`, click **Stop** on the Summarizer worker, then run `listCorpora()` again (opening the console wakes the worker). Pass: the corpus is still there and `query` still works. *Why now:* MV3 kills idle service workers after ~30s, so anything that only lived in memory would vanish between scans and chat in phase 4+.
+- [x] **CP-C1: retrieval sanity on one real page.** *(Passed 2026-11-03 on a Wikipedia TFA archive page: early, late and deep-in-long-section questions all found the right section. Whole-section highlight is expected from search alone. Sentence-level highlighting comes from the chatbot's quotes in F.)* Scan the headed docs page, then ask 3 questions with `query(...)`: one whose answer is in an early section, one in a late section, and one whose answer sits deep inside a long section. Pass: the right section is in the top 3 for all three, and the third question specifically shows that chunking works. *Why now:* if retrieval quality is wrong, the fix (chunk size, heading prefix) belongs in C. In the combined run it would look like a side-panel problem.
+- [x] **CP-C2: data survives a service-worker restart.** *(Passed 2026-11-03: the worker went idle and Chrome stopped it ("service worker (Inactive)"); after it woke, `listCorpora()` and `query` still worked. Note: reloading the extension clears `chrome.storage.session`, so the tab-to-corpus link is lost then. The IndexedDB data survives.)* After a scan, open `chrome://serviceworker-internals`, click **Stop** on the Summarizer worker, then run `listCorpora()` again (opening the console wakes the worker). Pass: the corpus is still there and `query` still works. *Why now:* MV3 kills idle service workers after ~30s, so anything that only lived in memory would vanish between scans and chat in phase 4+.
 
 ## Exit criteria for Phase C (ticked during the combined run, except unit tests and checkpoints)
 
