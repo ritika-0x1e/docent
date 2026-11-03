@@ -10,10 +10,10 @@
 // media area is a reasonable proxy for "how media-heavy is this page" in the meantime.
 
 function measurePage(article) {
-  const wordCount = (article?.textContent || "")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean).length;
+  const wordCount = countWords(article?.textContent || "");
+  // Link density (A2 listing-page rule): words inside links in Readability's extracted content.
+  const links = article?.content?.querySelectorAll?.("a") ?? [];
+  const linkWordCount = [...links].reduce((n, a) => n + countWords(a.textContent || ""), 0);
 
   const mediaEls = document.querySelectorAll("img, video, canvas, svg");
   const mediaArea = [...mediaEls].reduce((sum, el) => {
@@ -23,5 +23,5 @@ function measurePage(article) {
 
   const contentArea = document.documentElement.scrollWidth * document.documentElement.scrollHeight;
 
-  return { wordCount, mediaArea, contentArea };
+  return { wordCount, linkWordCount, mediaArea, contentArea };
 }

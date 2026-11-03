@@ -35,7 +35,8 @@ async function callGemini(body, key) {
     if (response.ok) return json;
 
     const wait = retryDelayMs(response, json);
-    if (response.status === 429 && attempt === 0 && wait <= MAX_RETRY_WAIT_MS) {
+    // 429 (rate limit) and 503 ("model overloaded", seen during the combined run) are both temporary.
+    if ((response.status === 429 || response.status === 503) && attempt === 0 && wait <= MAX_RETRY_WAIT_MS) {
       await new Promise((resolve) => setTimeout(resolve, wait));
       continue;
     }
@@ -44,10 +45,11 @@ async function callGemini(body, key) {
 }
 
 /**
- * @param {{llm?: boolean}} opts  llm: false skips the network entirely (fallback headings only)
+ * @param {{llm?: boolean, onBatch?: (sections) => void}} opts  llm: false skips the network entirely
+ *   (fallback headings only); onBatch gets each batch's labelled sections as soon as it lands
  * @returns {Promise<{sections, stats: {skipped?: string, batches, labelled, errors, ms}}>}
  */
-async function labelSections(sections, pageTitle, { llm = true } = {}) {
+async function labelSections(sections, pageTitle, { llm = true, onBatch = () => {} } = {}) {
   const t0 = Date.now();
   const key = llm ? await getGeminiKey() : null;
   if (!key) {
@@ -65,6 +67,7 @@ async function labelSections(sections, pageTitle, { llm = true } = {}) {
       const { results: batchResults, error } = parseResponse(batch, await callGemini(buildRequestBody(batch, pageTitle), key));
       for (const [id, r] of batchResults) results.set(id, r);
       if (error) errors.push(error);
+      onBatch(applyResults(batch, batchResults));
     } catch (err) {
       // "Failed to fetch" here would mean CORS blocked the call: add the narrow host permission (plan, B3).
       errors.push(err.message);

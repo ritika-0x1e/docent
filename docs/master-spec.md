@@ -53,6 +53,7 @@ No dedicated backend server is required for v1. A Cloudflare Workers free-tier p
 - Use **Readability.js** to strip boilerplate and get the main content node — solves most of the "what is actually the article" problem for free.
 - Classify text-heavy vs. media-heavy by comparing extracted text length against media pixel area.
 - If text is too sparse (~<150–200 words) and the page is media-dominated: **don't silently proceed** — show a banner ("not enough text detected") with a **force-scan** override button. However small the text, the user can still force it through.
+- **Listing pages count as "not enough content" too** (decided 2026-11-03, combined run). Some pages clear the word floor only with link text: the YouTube home page, search results, front pages. If more than 50% of the extracted words are inside links, the page is classed `link-list` and gets the same banner + force-scan override ("This looks like a list of links rather than an article"). Raising the word floor instead was rejected: it would block real short articles.
 - If the content script can't attach at all (strict CSP, Trusted Types, permission-blocked sites) — detect this and clearly say "this site restricts extension access," never fail silently.
 
 ### 3.1a Special sources: Google Docs & raw Markdown (decided 2026-11-03, sub-feature A5)
@@ -264,7 +265,8 @@ Per-phase plans live in `docs/phased-implementation-plan/`, one file per phase.
 - **D6 (crawl approved links)**: request `optional_host_permissions` at runtime, per-origin, at the moment a link is approved in the picklist — never a standing grant for origins the user hasn't actually approved.
 - **E2 (web search)**: add a single narrow static host_permission for `html.duckduckgo.com` when E2 is built (phase 8) — fixed, low-scope, known upfront.
 - **Phase B (embeddings)**: adds the `offscreen` permission and `'wasm-unsafe-eval'` in the extension-pages CSP (decided 2026-11-02). MV3 service workers can't spawn Web Workers, so the background creates an offscreen document (reason `WORKERS`), which hosts the embedding worker. ONNX Runtime runs as WebAssembly, so it needs the CSP entry. Neither grants access to any site.
-- Rationale: matches the existing "minimum permissions per phase, no `<all_urls>` until phase 9" principle already in CLAUDE.md; avoids a standing broad grant for a personal/free-first tool.
+- **Phase 4 (side panel scanning), decided 2026-11-03 after CP-4-1:** `activeTab` is granted only by a click on the toolbar icon, never by a click inside the side panel. So Start scan failed on any tab the user had switched to. Fix: `optional_host_permissions: ["http://*/*", "https://*/*"]`, **requested once for all sites** (Chrome's own prompt), the first time Start scan hits a tab without access. If declined, the icon-click path still works. Nothing is granted at install, and the grant can be revoked in Chrome's extension settings. Rejected alternatives: a static `<all_urls>` grant (Chrome shows an install-time warning) and per-site prompts (too frequent for everyday use). This loosens the "no `<all_urls>` until phase 9" rule below. D6 (phase 9) reuses this grant when it's present and falls back to its per-origin request when it isn't.
+- Rationale (original): "minimum permissions per phase, no `<all_urls>` until phase 9", as in CLAUDE.md; avoids a standing broad grant for a personal/free-first tool. Since 2026-11-03 the one exception is the user-approved, revocable all-sites grant above.
 
 ### 7.2 Embedding model weights (decided 2026-11-02: download on first use)
 - The Transformers.js library and the ONNX Runtime `.wasm` files are **vendored**, because MV3 forbids remote code. The `all-MiniLM-L6-v2` quantized weights (~23 MB, data, not code) are **fetched from the Hugging Face hub on first use** and cached by Transformers.js in the Cache API.
@@ -284,3 +286,15 @@ Per-phase plans live in `docs/phased-implementation-plan/`, one file per phase.
 - If the same page gets crawled (via D6) into two different threads, each thread re-fetches and re-embeds independently — no shared/global corpus cache keyed by URL.
 - Rationale: embeddings run locally via Transformers.js (free, just CPU time) — recompute cost is not money, so caching is a pure optimization, not a necessity. Avoids staleness and cache-invalidation complexity (TTL/content-hash tracking) that a shared cache would require, consistent with the project's lightweight, free-first philosophy.
 - Revisit only if real-world usage shows the same popular pages get crawled into many threads and recompute time becomes a noticeable UX cost.
+
+---
+
+## 8. Follow-ups (noted, not scheduled)
+
+- **Scan speed / embedding performance** (noted 2026-11-03 by the user during CP-4-1). Embedding a Wikipedia-length page takes about 10 s now. Linked pages (phase 9) and multi-page threads will multiply that. Look into it once the extension is functional end to end, not before. Measure first (`msModelLoad` vs `msEmbed` are already in the C stats). Candidate levers, none decided:
+  - WASM threads (`numThreads > 1`, which needs cross-origin isolation in the offscreen document)
+  - WebGPU backend
+  - Batch size
+  - Reusing B2's unit vectors for C chunks on headingless pages
+  - Embedding visible/early sections first
+  - A smaller model

@@ -54,7 +54,7 @@ Do not start a sub-feature not listed there without checking in first. If a sub-
 - **Free-tier discipline.** Don't introduce a paid API or a hosted backend without flagging it — the whole point of this project is a free, mostly client-side stack (see spec §1 and §3.6).
 - **Test each sub-feature in isolation** per the spec's phase breakdown (§6) before wiring it into the next phase. Don't jump ahead to chat/agent wiring before extraction+sectioning+retrieval are independently verified. **Approved exception (spec §6a):** phases 2–4 get one combined test run at the end of phase 4, gated by per-phase checkpoints. That isn't a violation, but phase 5 must not start until that combined run is ticked off.
 - **Section locations are text-quote anchors, not stored `Range`s** (spec §3.2). Live `Range`s exist only inside the content script and are rebuilt from anchors.
-- **Manifest V3 permissions**: request the minimum host permissions needed per phase; don't request broad `<all_urls>` access until link-crawling (phase 9) actually needs it. Approved so far: `activeTab`, `scripting`, `sidePanel`, `storage`, plus `offscreen` and `'wasm-unsafe-eval'` in the extension-pages CSP, both from phase 2 (spec §7.1).
+- **Manifest V3 permissions**: request the minimum host permissions needed per phase; don't request broad host access beyond what's approved. Approved so far: `activeTab`, `scripting`, `sidePanel`, `storage`, plus `offscreen` and `'wasm-unsafe-eval'` in the extension-pages CSP, both from phase 2. From phase 4: `optional_host_permissions` for `http(s)://*/*`, requested **once for all sites** at runtime from Start scan, never as a static install-time grant (spec §7.1).
 
 ## Skills
 

@@ -1,12 +1,12 @@
-// Phase A-B test harness (temporary — see docs/phased-implementation-plan/phase-B-sectioning.md).
-// Real orchestration moves to H2's "Start scan" button in phase 4 (background/pipeline.js); this
-// exists only so A, A5 and B can be verified before the side panel (I1) is built.
+// Background service worker: opens the side panel on toolbar click (I1), runs scans for it over a
+// port (H2, background/pipeline.js), and keeps the Phase A–C console helpers for debugging until
+// their real replacements exist (phase-4 plan, "Harness changes").
 //
-// Usage: click the toolbar icon on any tab, then check this file's output in
-// chrome://extensions -> Summarizer -> "service worker" devtools console.
+// Console: chrome://extensions -> Summarizer -> "service worker" devtools console.
 
 importScripts(
   "offscreen-client.js",
+  "pipeline.js",
   "../lib/vector.js",
   "../lib/breakpoints.js",
   "../lib/sections.js",
@@ -21,148 +21,7 @@ importScripts(
   "retriever.js"
 );
 
-const HANDSHAKE_TIMEOUT_MS = 2000;
-
-const CONTENT_FILES = [
-  "content/vendor/readability.js",
-  "lib/classify.js",
-  "lib/text.js",
-  "lib/sections-headings.js",
-  "lib/gdocs.js",
-  "lib/markdown-blocks.js",
-  "content/extract.js",
-  "content/classify.js",
-  "content/blocks.js",
-  "content/anchor.js",
-  "content/sources.js",
-  "content/bootstrap.js",
-];
-
 const DEBUG_HIGHLIGHT_CSS = "::highlight(summarizer-debug) { background-color: #ffe066; color: #000; }";
-
-// Starts listening for the content script's "ready" message. Must be called *before* injecting:
-// bootstrap.js sends "ready" as soon as it runs, which can arrive before executeScript's promise
-// resolves — a listener registered afterwards would miss it and misreport a normal page as blocked.
-// Returns { promise, cancel } — cancel() tears down the listener if injection fails.
-function listenForHandshake(tabId, timeoutMs) {
-  let listener;
-  let timer;
-  let resolveFn;
-  let settled = false;
-
-  const settle = (result) => {
-    if (settled) return;
-    settled = true;
-    chrome.runtime.onMessage.removeListener(listener);
-    clearTimeout(timer);
-    resolveFn(result);
-  };
-
-  const promise = new Promise((resolve) => {
-    resolveFn = resolve;
-
-    listener = (message, sender) => {
-      if (sender.tab?.id !== tabId) return;
-      if (message?.type !== "ready") return;
-      settle(message.error ? { blocked: true, reason: "ready-with-error", detail: message.error } : { blocked: false });
-    };
-
-    chrome.runtime.onMessage.addListener(listener);
-  });
-
-  return {
-    promise,
-    startTimeout: () => {
-      timer = setTimeout(() => settle({ blocked: true, reason: "handshake-timeout" }), timeoutMs);
-    },
-    cancel: () => settle({ blocked: true, reason: "cancelled" }),
-  };
-}
-
-// Content scripts persist in the tab's isolated world until navigation, so a second toolbar click
-// on the same page must not re-inject: lib/classify.js's top-level consts would throw on redeclaration
-// and bootstrap.js would stack a duplicate onMessage listener. bootstrap.js sets this flag once it's up.
-// This probe is itself an executeScript call, so restricted URLs reject here (A4: injection-rejected).
-async function isAlreadyInjected(tabId) {
-  const [injection] = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: () => globalThis.__summarizerContentLoaded === true,
-  });
-  return injection?.result === true;
-}
-
-async function attemptScan(tabId, { force = false } = {}) {
-  let alreadyInjected;
-  try {
-    alreadyInjected = await isAlreadyInjected(tabId);
-  } catch (e) {
-    return { blocked: true, reason: "injection-rejected", detail: e.message };
-  }
-
-  if (!alreadyInjected) {
-    const handshake = listenForHandshake(tabId, HANDSHAKE_TIMEOUT_MS);
-    try {
-      await chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_FILES });
-    } catch (e) {
-      handshake.cancel();
-      return { blocked: true, reason: "injection-rejected", detail: e.message };
-    }
-    handshake.startTimeout();
-    const result = await handshake.promise;
-    if (result.blocked) return result;
-  }
-
-  const response = await chrome.tabs.sendMessage(tabId, { type: "scan", force });
-  return { blocked: false, response };
-}
-
-// A → B: content script extraction/anchoring/B1, then B2 (if no headings) and B3 here.
-// The finished sections are kept in session storage per tab, so the console helpers below still
-// work after the service worker has been stopped and restarted.
-async function runPipeline(tabId, { force = false, llm = true } = {}) {
-  const scan = await attemptScan(tabId, { force });
-  if (scan.blocked || scan.response?.status !== "ok") return scan;
-
-  const { response } = scan;
-  let raw = response.sections;
-  let b2 = null;
-  if (!raw) {
-    b2 = await sectionSemantically(response.blocks);
-    raw = b2.sections;
-  }
-  const finalized = finalizeSections(raw, response.blocks);
-
-  // B3 and C1 run in parallel: chunk text uses only HTML headings, never generated ones.
-  const [b3, embedded] = await Promise.all([
-    labelSections(finalized, response.article.title, { llm }),
-    embedSectionChunks(finalized),
-  ]);
-
-  const tab = await chrome.tabs.get(tabId);
-  let corpusId = null;
-  let storeError = null;
-  try {
-    corpusId = await saveCorpus({
-      url: tab.url,
-      title: response.article.title,
-      source: response.source,
-      embeddingModel: embedded.stats.model,
-      sections: b3.sections,
-      chunks: embedded.chunks,
-    });
-  } catch (err) {
-    storeError = err.message; // sections stay usable in session storage; only persistence failed
-  }
-
-  await chrome.storage.session.set({ [`scan:${tabId}`]: { url: tab.url, source: response.source, corpusId, sections: b3.sections } });
-  return {
-    ...scan,
-    sections: b3.sections,
-    b2Stats: b2?.stats ?? null,
-    b3Stats: b3.stats,
-    cStats: { corpusId, storeError, chunks: embedded.chunks.length, ...embedded.stats },
-  };
-}
 
 async function getLastScan(tabId) {
   const key = `scan:${tabId}`;
@@ -225,7 +84,7 @@ function logSections({ response, sections, b2Stats, b3Stats, cStats }) {
 
 async function runHarness(tabId, opts = {}) {
   console.log(`[Summarizer/A] scanning tab ${tabId}${opts.force ? " (forced)" : ""}${opts.llm === false ? " (no LLM)" : ""}...`);
-  const result = await runPipeline(tabId, opts);
+  const result = await runScan(tabId, opts);
 
   if (result.blocked) {
     console.warn(`[Summarizer/A] site restricts extension access (${result.reason})`, result.detail || "");
@@ -366,7 +225,75 @@ globalThis.embed = async (texts) => {
   return vectors;
 };
 
+// The panel's requests about a scanned tab (phase 4: reading view + the temporary find-sections box,
+// decision 2 — deleted when chat (I3) lands). Content scripts never send these.
+const panelHandlers = {
+  // Show a section on the page: live highlight when anchored, outline jump on Google Docs.
+  "panel-show-section": async ({ tabId, index }) => {
+    const section = (await getLastScan(tabId))?.sections[index];
+    if (!section) return { ok: false, error: "This tab's scan is gone. Scan it again." };
+    if (section.blocks.some((b) => b.anchored)) return highlightSection(tabId, index);
+    if (section.jump) return jumpTo(tabId, index);
+    return { ok: false, error: "This section can't be shown on the page." };
+  },
+  // Top-5 sections for a query, each with its best chunk's text as the snippet.
+  "panel-find": async ({ tabId, query: text }) => {
+    const scan = await getLastScan(tabId);
+    if (!scan?.corpusId) return { ok: false, error: "Nothing stored for this tab yet. Scan it first." };
+    const { hits, staleCorpora } = await retrieve([scan.corpusId], text, 5);
+    if (staleCorpora.length) return { ok: false, error: "This scan used an older embedding model. Scan again." };
+    return {
+      ok: true,
+      hits: hits.map((h) => {
+        const chunk = chunkSection(h.section)[h.bestChunkIndex]?.text ?? h.section.text;
+        return {
+          index: h.section.order,
+          score: h.score,
+          heading: h.section.heading,
+          headingSource: h.section.headingSource,
+          headingPath: h.section.headingPath,
+          snippet: chunk.slice(chunk.lastIndexOf("\n") + 1), // drop the heading-path prefix line
+          action: h.section.blocks.some((b) => b.anchored) ? "highlight" : h.section.jump ? "jump" : null,
+        };
+      }),
+    };
+  },
+};
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const handler = panelHandlers[message?.type];
+  if (!handler || sender.tab) return; // not ours, or from a content script
+  handler(message).then(sendResponse, (err) => sendResponse({ ok: false, error: String(err?.message ?? err) }));
+  return true;
+});
+
+// I1: the toolbar icon opens the panel; nothing scans until Start scan (H1).
+// Opened from onClicked rather than setPanelBehavior({openPanelOnActionClick}): CP-4-1 showed the
+// latter doesn't grant activeTab, while an onClicked click does. sidePanel.open() must run inside the
+// click's user gesture, so nothing may be awaited before it.
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
 chrome.action.onClicked.addListener((tab) => {
-  if (!tab.id) return;
-  runHarness(tab.id);
+  chrome.sidePanel.open({ windowId: tab.windowId }).catch((err) => console.error("[Summarizer] sidePanel.open failed:", err));
+  // An already-open panel can now read this tab's title; no receiver (panel just opening) is fine.
+  chrome.runtime.sendMessage({ type: "action-clicked", tabId: tab.id }).catch(() => {});
+});
+
+// H2: the panel starts scans over a "scan" port and gets progress back on it. If the panel closes
+// mid-scan the pipeline keeps going and the corpus is still saved; progress just has nowhere to go.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "scan") return;
+  let connected = true;
+  port.onDisconnect.addListener(() => (connected = false));
+  const post = (message) => connected && port.postMessage(message);
+
+  port.onMessage.addListener(async (message) => {
+    if (message?.type !== "start") return;
+    const { tabId, scanId, force = false } = message;
+    try {
+      await runScan(tabId, { force }, (progress) => post({ tabId, scanId, ...progress }));
+    } catch (err) {
+      console.error("[Summarizer] scan failed:", err);
+      post({ tabId, scanId, stage: "error", message: String(err?.message ?? err) });
+    }
+  });
 });

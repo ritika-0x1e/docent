@@ -74,6 +74,17 @@ idle (not scanned) ─Start scan─► scanning(stage) ─┬─► ready(sectio
 
 - **Which tab:** the panel follows the active tab of its own window, using `chrome.tabs.query({active, currentWindow})` plus `tabs.onActivated` and `tabs.onUpdated` (on a URL change).
 - **Per-tab memory, while the panel is open:** an in-memory map `tabId → {url, state}`, so switching away and back shows that tab's sections again. If the tab navigated to a new URL, its entry resets to `idle`. Closing the panel forgets everything. Surviving a panel close is a cache hit backed by stored corpora, which is phase 5 (H2/G3), so it isn't built here.
+> **As implemented (2026-11-03, build steps 1–2):**
+> - The icon opens the panel from `chrome.action.onClicked` → `chrome.sidePanel.open()`, not `setPanelBehavior({openPanelOnActionClick})`. CP-4-1's first run showed that the latter doesn't grant `activeTab`, so even the tab where the icon was clicked failed to scan.
+> - Each Start scan gets a `scanId`. Progress from a scan that was replaced or cut off by a navigation is ignored.
+> - Without the `tabs` permission, Chrome hides `tab.title`/`tab.url`, and `changeInfo.url`, for tabs the extension has no access to. So the header falls back to "This tab", and a navigation is detected from `changeInfo.status === "loading"` (reloads count too). Whether that's acceptable is part of what CP-4-1 shows.
+
+> **As implemented (2026-11-03, build steps 3–5):**
+> - B3 reports each batch (`labelSections(…, {onBatch})` sends a `"summaries"` progress message), and the reducer merges it into the cards by section id.
+> - Each reading-view card also gets a **Show on page** button (or **Jump to section** on Google Docs; none when snippet-only). It's the same action as clicking a find-sections result, so combined-run item 9 can be checked from the cards. This is the only addition beyond the plan. The buttons appear only once the scan is `ready`, because they read the saved scan.
+> - Find-sections snippets are the hit's best-matching chunk, not the start of the section.
+> - The panel talks to the background with `panel-show-section` / `panel-find` runtime messages. These are temporary and go away with I3.
+
 - **Pressing Start scan on a tab that's already `ready` runs the pipeline again.** That's the matrix's "no thread → run full pipeline" row, not a new rescan feature. Phase 5 turns it into a cache hit when a thread is selected.
 
 ## I1/I2 — Layout & reading view
@@ -97,10 +108,14 @@ idle (not scanned) ─Start scan─► scanning(stage) ─┬─► ready(sectio
 
 ## Checkpoints: test these before building the rest of phase 4
 
-- [ ] **CP-4-1: scanning a tab you switched to, right after the I1 shell + Start scan wiring exist.**
+- [x] **CP-4-1: scanning a tab you switched to, right after the I1 shell + Start scan wiring exist.**
   1. Open the panel from the toolbar on tab 1 and Start scan. Expected: it works.
   2. Switch to tab 2, a normal article, without clicking the icon, and Start scan.
   3. Pass: tab 2 scans. Fail: tab 2 reports an access error. Then pick option (a) or (b) from decision 1 before going on.
+
+  *Result 2026-11-03: **failed at step 2.** Step 1 passed once the icon opened the panel through `onClicked` (Wikipedia: real title, 15 sections). Tab 2 (paulgraham.com, no icon click) got `injection-rejected: Cannot access contents of the page`. The user also asked whether access could be on by default. That adds options "all sites from the start" (`host_permissions: <all_urls>`) and "ask once for all sites" (optional `<all_urls>`, requested once), both of which mean relaxing the CLAUDE.md / §7.1 rule against broad host access before phase 9. **Decided: ask once for all sites** (recorded in master-spec §7.1).*
+
+  *Retest 2026-11-03: **passed.** The icon-click tab scans with no prompt. On a switched-to tab, Start scan shows Chrome's all-sites prompt once, then scans. Embedding took about 10 s, and speed is logged as a follow-up in master-spec §8.*
 
   *Why now:* if this fails, the scan flow, error messages and possibly the manifest change, and building the rest of the panel first would mean redoing it.
 
@@ -109,9 +124,9 @@ idle (not scanned) ─Start scan─► scanning(stage) ─┬─► ready(sectio
 Run after phase 4 is built. Tick the matching exit criteria in each phase doc as you go. Use the same pages as before: the headed docs page, the "Subheadings" blog, two Paul Graham essays, the Git-questions SPA article, YouTube (sparse) and `chrome://extensions`.
 
 **Panel & flow (phase 4)**
-1. The toolbar click opens the panel, and nothing scans until Start scan.
-2. Headed docs page: progress stages show, sections appear, then summaries fill in.
-3. YouTube: A3 banner, then **Force scan anyway** runs.
+1. ✅ The toolbar click opens the panel, and nothing scans until Start scan. *(Passed 2026-11-03.)*
+2. ✅ Headed docs page: progress stages show, sections appear, then summaries fill in. *(Passed 2026-11-03 on Wikipedia "History of cricket to 1725". Stages and progressive cards worked. Gemini returned 503 "high demand" for both batches; the scan still finished and the B3 warning banner showed. B3 now retries once on 503 as well as 429. Summary quality is checked in item 10.)*
+3. ✅ YouTube: A3 banner, then **Force scan anyway** runs. *(Passed 2026-11-03 on a video page: banner shown, and the forced scan gave 2–3 sections. The YouTube **home page** got no banner: its list of video titles clears the 175-word minimum. The user wants listing pages like that treated as "not enough content". **Fixed the same day** with the A2 link-density rule (master-spec §3.1). On recheck, the home page shows the "list of links" banner and force scan works, while Wikipedia still scans with no banner.)*
 4. `chrome://extensions`: the restricts-access message.
 5. Switching tabs shows the other tab's state; switching back shows the earlier sections; navigating resets to "not scanned".
 6. Closing the panel mid-scan, then calling `listCorpora()`, shows the corpus was still saved.
