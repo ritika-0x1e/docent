@@ -17,16 +17,29 @@
         <button type="button" id="start-scan" class="primary">Start scan</button>
       </div>
       <div class="banner" id="banner" hidden></div>
+      <div class="gen-row" id="gen-row" hidden></div>
 
       <form class="settings" id="settings" hidden>
+        <label for="llm-provider">Headings &amp; summaries</label>
+        <select id="llm-provider">
+          <option value="gemini">Gemini Flash-Lite (local Ollama if Gemini fails)</option>
+          <option value="ollama">Local Ollama only</option>
+        </select>
+
         <label for="gemini-key">Gemini API key</label>
-        <p class="muted small">Used for generated headings and summaries. Stored only in this browser.</p>
+        <p class="muted small">Stored only in this browser.</p>
         <div class="field-row">
           <input type="password" id="gemini-key" autocomplete="off" spellcheck="false" placeholder="Paste key" />
           <button type="submit">Save</button>
           <button type="button" id="gemini-key-clear">Clear</button>
         </div>
         <p class="muted small" id="settings-status" role="status"></p>
+
+        <label for="ollama-model">Ollama model</label>
+        <p class="muted small">Leave empty to skip Ollama. Needs Ollama running on this computer (localhost:11434).</p>
+        <div class="field-row">
+          <input type="text" id="ollama-model" autocomplete="off" spellcheck="false" placeholder="a name from: ollama list" />
+        </div>
       </form>
     </header>
 

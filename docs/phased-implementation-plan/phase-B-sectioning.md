@@ -113,8 +113,11 @@ Not handled (noted for tuning, not built): a single huge headed section isn't su
 **Breakpoints.** `lib/breakpoints.js`, `detectBreakpoints(embeddings, wordCounts, opts)`, pure. It returns the block indices where a new section starts.
 
 - Before embedding, very short text blocks (< `MIN_BLOCK_WORDS` = 12) are merged into the following block, because one-line paragraphs make noisy vectors.
-- The function walks blocks in order and keeps the running centroid of the current section (the mean of its vectors). It starts a new section when `cosine(block, centroid) < SIMILARITY_THRESHOLD`. It also never ends a section before `MIN_SECTION_BLOCKS` blocks, and it forces a break once a section exceeds `MAX_SECTION_WORDS`.
+- The function walks blocks in order and keeps the running centroid of the current section (the mean of its vectors). It starts a new section when `cosine(block, centroid)` drops below the threshold (per page since 2026-11-06, see below). It also never ends a section before `MIN_SECTION_BLOCKS` blocks, and it forces a break once a section exceeds `MAX_SECTION_WORDS`.
 - Defaults, to tune against real pages like the Phase A thresholds: `SIMILARITY_THRESHOLD = 0.45`, `MIN_SECTION_BLOCKS = 2`, `MAX_SECTION_WORDS = 600`. They're exported constants passed in through `opts`, per the skill, not buried in the function.
+  > **Changed 2026-11-06 (combined run test 8): the threshold is now per page.** A fixed threshold didn't carry across kinds of writing. On 12 headingless pages (news from NPR, essays from Paul Graham, Sam Altman, Joel Spolsky and danluu, a blog post, a short story, two speeches, a German novella), the mean neighbour similarity ranged 0.39–0.59. A fixed 0.45 cut news into ~70-word scraps; 0.30 (briefly tried 2026-11-05, tuned on two Paul Graham essays) almost never fired on the German text. Now `pageThreshold` compares each unit with the mean of the 3 before it and takes mean − 0.5 × sd of those similarities (`THRESHOLD_SPREAD`), falling back to 0.45 for pages too short to profile. The section minimum is now `MIN_SECTION_WORDS = 150` instead of a unit count, so it doesn't depend on how a site splits paragraphs (`MIN_SECTION_BLOCKS` stays as an option, default 1). Result: 220–520-word sections on average on every page, mostly topic-driven breaks rather than the 600-word cap. One check against ground truth: "Do Things That Don't Scale" has 10 bold subheadings, and 8 of them get a break within one unit, with 1 break elsewhere (0.45 fixed: 8 hits and 3 elsewhere; 0.30: 6 hits).
+  >
+  > **Input fixes found in the same test, all general rather than site-specific:** (1) Readability turns wrapper elements (a `<div>`, or an old `<font>` around a whole essay) into a `<p>`, which can then hold every paragraph. `parseBlocks` now unwraps any `<p>` that holds block elements, keeping loose text as its own `<p>`. This generalizes the Wikipedia heading fix. (2) Layout wrappers: a `<blockquote>`, `<table>` or list whose text is ≥ 80% in nested blocks (`WRAPPER_SHARE`) is skipped and its nested blocks used instead. Lincoln's second inaugural (an old table layout) was one 1,058-word block; danluu's largest block went from 1,332 to 418 words. Real quotes, data tables and plain lists stay one block; block coverage stays ≥ 96% on all 17 test pages. (3) The debug highlight scrolls to the highlighted range itself, not its parent element (which can be the whole article). (4) `dropTrailingBackMatter` (`lib/sections-headings.js`) cuts the block list at a plain-text back-matter line ("Notes", "References", …) in the page's second half, for pages whose back matter isn't under a real heading. English names only, like `REFERENCE_HEADINGS`.
 - Produced sections have `heading: null`, `headingSource: "generated"` (filled by B3) and `method: "semantic"`.
 
 Embeddings computed here are **not** stored. C2 owns storage, and the section-level embeddings retrieval needs are a different input (whole section text). Re-embedding in C is the cost of keeping B independent. It runs locally and costs only CPU.
@@ -123,7 +126,7 @@ Embeddings computed here are **not** stored. C2 owns storage, and the section-le
 
 `background/llm.js` with pure helpers in `lib/section-prompt.js`:
 
-- **Batched**, not one call per section. The Gemini free tier is rate-limited per minute, and an 11k-word essay can produce 20+ sections. Up to 8 sections go in one request, each truncated to ~400 words. Batches run sequentially. Each section is still summarized on its own text only, never the whole page, as the skill requires.
+- **Batched**, not one call per section. The Gemini free tier is rate-limited per minute, and an 11k-word essay can produce 20+ sections. Up to 8 sections go in one request, each truncated to ~400 words. *(Raised to **30** on 2026-11-05 during the phase 4 combined run, approved by the user: repeated test scans hit the free-tier 429 quota. With 8, a 66-section doc needed 9 requests; with 30 it needs 3.)* Batches run sequentially. Each section is still summarized on its own text only, never the whole page, as the skill requires.
 - Requests use JSON structured output (`responseMimeType: "application/json"` plus a response schema): an array of `{id, heading, summary}`. For sections whose heading came from the HTML, only `summary` is requested and used.
 - Model: Gemini Flash (free tier), kept as one constant in `llm.js`. The current model ID is verified against Google's docs when this is implemented, not guessed now.
   > **As implemented:** `gemini-3.6-flash`, marked stable on Google's model list (checked 2026-11-03). The `gemini-flash-latest` alias was rejected because it's swapped to each new release. The list doesn't say which models are on the free tier; confirm when setting up the key. A 429 is retried once only if the suggested wait is ≤ 20 s, because an idle service worker can be stopped after ~30 s.
@@ -167,7 +170,7 @@ This is still scaffolding and gets replaced by H2/I2 in phase 4.
 - `lib/sections-headings.js`: intro section, empty-body headings folding into `headingPath`, nested levels, and the < 2 headings case (returns null so the caller falls to B2).
 - `lib/vector.js`: cosine of identical, orthogonal and opposite vectors; the mean.
 - `lib/breakpoints.js`: three synthetic clusters of vectors give exactly two breaks; the `MIN_SECTION_BLOCKS` and `MAX_SECTION_WORDS` constraints hold; one block gives one section.
-- `lib/section-prompt.js`: batching splits at 8; truncation; the response parser accepts valid JSON, rejects unknown ids and missing fields, and fills fallbacks.
+- `lib/section-prompt.js`: batching splits at the batch size (8, now 30); truncation; the response parser accepts valid JSON, rejects unknown ids and missing fields, and fills fallbacks.
 
 **Manual (harness), reusing Phase A's pages:**
 - Headed docs page and the "Subheadings" blog → `method: "headings"`, and sections match the page's visible headings.
@@ -187,14 +190,14 @@ Everything else (B2 threshold tuning, B3 output quality, LLM fallback) is checke
 
 ## Exit criteria for Phase B (ticked during the combined run, except unit tests and checkpoints)
 
-- [ ] All `lib/` unit tests pass
-- [ ] B1 splits a real headed page into sections matching its visible headings
-- [ ] B2 splits a real headingless page into plausible topic sections
-- [ ] Anchoring rate ≥ 90% of blocks on the test pages, and `highlightSection` lands on the correct text
-- [ ] Embedding worker runs in the offscreen document; the model is cached after first load
-- [ ] B3 generates headings/summaries in batches, and falls back cleanly when the LLM is unavailable
-- [ ] `manifest.json` adds only `offscreen` + the wasm CSP (plus the Gemini host permission only if CORS forces it), still no broad host permissions
-- [ ] `semantic-sectioning` skill updated to the new output shape; spec §3.2 / §5.B1 note the per-block anchor change
+- [x] All `lib/` unit tests pass
+- [x] B1 splits a real headed page into sections matching its visible headings *(combined run item 7)*
+- [x] B2 splits a real headingless page into plausible topic sections *(combined run item 8)*
+- [x] Anchoring rate ≥ 90% of blocks on the test pages, and `highlightSection` lands on the correct text *(2026-11-06, combined run test 9, automated with Playwright on 10 varied pages: 99.0–100% anchored, 204/204 sections highlighted exactly; details in the phase 4 plan.)*
+- [x] Embedding worker runs in the offscreen document; the model is cached after first load *(CP-B2)*
+- [x] B3 generates headings/summaries in batches, and falls back cleanly when the LLM is unavailable *(combined run items 2 and 10)*
+- [x] `manifest.json` adds only `offscreen` + the wasm CSP (plus the Gemini host permission only if CORS forces it), still no broad host permissions
+- [x] `semantic-sectioning` skill updated to the new output shape; spec §3.2 / §5.B1 note the per-block anchor change
 
 ## Build order inside the phase
 
@@ -206,3 +209,14 @@ Each step is testable before the next starts:
 5. B3 (`lib/section-prompt.js`, `background/llm.js`). Verify with and without a valid key.
 
 Once unit tests pass and CP-B1/CP-B2 pass, build A5 (`phase-A5-special-sources.md`: Google Docs + raw Markdown), then Phase C (`phase-C-embeddings-retrieval.md`). C1's worker already exists by then, so C covers section-level embeddings, C2 storage and C3 retrieval.
+
+> **Changed 2026-11-05 (phase 4 combined run, approved by the user):** B3 runs **on demand**, from the panel's "Generate headings & summaries", not inside every scan. It uses `gemini-3.5-flash-lite` (15 RPM / 500 RPD on the free tier, vs 5 / 20 for `gemini-3.6-flash`), and can use local Ollama (E5) instead or as a fallback when Gemini's quota runs out. Ollama batches are 8 sections with `num_ctx` 8192. See master-spec §3.2 and §3.6. The `{llm: false}` scan option is gone, since scans never call the LLM now.
+
+> **Fixed 2026-11-05 (phase 4 combined run, test 7):** Wikipedia headings were being lost or polluted.
+> 1. On pages whose headings have no "[edit]" link (semi-protected ones, e.g. "White House"), Readability turned `<div class="mw-heading"><h2>…</h2></div>` into `<p><h2>…</h2></p>`, because it doesn't count headings as block children. The outer `<p>` won in `parseBlocks`, so the page had no headings and fell back to B2. `content/blocks.js` now unwraps paragraphs that contain a heading.
+> 2. On other Wikipedia pages, each "[edit]" link became a one-word block opening every section, and a parent heading with nothing else under it became a "1 words" section. `content/extract.js` now removes `.mw-editsection` from the clone before Readability runs.
+>
+> Checked with jsdom on saved copies of both pages: White House went from 0 headings to 33 (30 sections), and "History of cricket to 1725" now matches its Contents box, with no near-empty sections.
+
+> **Changed 2026-11-05 (combined run test 7, approved by the user):** B1 drops back-matter sections (References, Notes, Bibliography, Further reading, External links, etc. — `REFERENCE_HEADINGS` / `isReferenceHeading` in `lib/sections-headings.js`), including their sub-sections. Whole-heading matches only. See master-spec §3.2. The user chose not to remove Wikipedia infoboxes.
+

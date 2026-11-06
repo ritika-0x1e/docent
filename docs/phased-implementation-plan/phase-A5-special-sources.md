@@ -122,11 +122,11 @@ scan → content: detectSource()
 
 ## Exit criteria for A5 (ticked during the combined run, except unit tests and the checkpoint)
 
-- [ ] `lib/gdocs.js` and `lib/markdown-blocks.js` unit tests pass
-- [ ] CP-A5-1 passes
-- [ ] A raw `.md` file splits on its `#` headings, and `highlightSection` highlights the right lines
-- [ ] A rendered GitHub README still works through the normal path
-- [ ] No new permissions
+- [x] `lib/gdocs.js` and `lib/markdown-blocks.js` unit tests pass
+- [x] CP-A5-1 passes
+- [x] A raw `.md` file splits on its `#` headings, and `highlightSection` highlights the right lines *(combined run item 15, 2026-11-06)*
+- [x] A rendered GitHub README still works through the normal path *(combined run item 16)*
+- [x] No new permissions *(combined run item 17)*
 
 ## Build order inside A5
 

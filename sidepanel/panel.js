@@ -16,6 +16,9 @@ const dom = {
   geminiKey: document.getElementById("gemini-key"),
   geminiKeyClear: document.getElementById("gemini-key-clear"),
   settingsStatus: document.getElementById("settings-status"),
+  genRow: document.getElementById("gen-row"),
+  llmProvider: document.getElementById("llm-provider"),
+  ollamaModel: document.getElementById("ollama-model"),
 };
 
 // Spec §7.1 (phase 4): host access is requested once for all sites, from a Start scan click,
@@ -35,6 +38,8 @@ const handlers = {
   onAllowAccess: () => requestAllSites().then((granted) => granted && startScan()),
   onOpenSettings: () => toggleSettings(true),
   onShowSection: (index) => showSection(index),
+  onGenerateHeadings: () => generateHeadings(),
+  onStopGenerating: () => chrome.runtime.sendMessage({ type: "panel-stop-relabel", tabId: state.activeTabId }).catch(() => {}),
 };
 
 function dispatch(event) {
@@ -56,6 +61,17 @@ async function showSection(index) {
   if (!result?.ok) console.warn("[Summarizer] couldn't show section", index, result?.error);
 }
 
+// B3 on demand. Batches stream in as "relabel-progress" messages; the reply carries the final state.
+async function generateHeadings() {
+  const tabId = state.activeTabId;
+  const corpusId = activeTab(state)?.corpusId;
+  if (!corpusId) return;
+  dispatch({ type: "relabel-started", tabId });
+  const result = await chrome.runtime.sendMessage({ type: "panel-relabel", tabId }).catch((err) => ({ ok: false, error: err.message }));
+  // The background reports the corpus it relabelled; fall back to ours if it failed before reading it.
+  dispatch({ type: "relabel-done", tabId, corpusId: result?.corpusId ?? corpusId, ...(result ?? { ok: false, error: "no response" }) });
+}
+
 async function findSections(query) {
   const tabId = state.activeTabId;
   const corpusId = activeTab(state)?.corpusId;
@@ -67,16 +83,19 @@ async function findSections(query) {
   render();
 }
 
-// ⚙: the same chrome.storage.local key Phase B's setGeminiKey writes. The value is never displayed back.
+// ⚙: chrome.storage.local keys read by background/llm.js. geminiApiKey is the same key Phase B's
+// setGeminiKey writes, and its value is never displayed back.
 function toggleSettings(open = dom.settings.hidden) {
   dom.settings.hidden = !open;
   dom.settingsToggle.setAttribute("aria-expanded", String(open));
-  if (open) refreshKeyStatus();
+  if (open) loadSettings();
 }
 
-async function refreshKeyStatus() {
-  const { geminiApiKey } = await chrome.storage.local.get("geminiApiKey");
-  dom.settingsStatus.textContent = geminiApiKey ? "A key is saved. Rescan a page to generate headings." : "No key saved.";
+async function loadSettings() {
+  const { geminiApiKey, llmProvider, ollamaModel } = await chrome.storage.local.get(["geminiApiKey", "llmProvider", "ollamaModel"]);
+  dom.settingsStatus.textContent = geminiApiKey ? "A key is saved." : "No key saved.";
+  dom.llmProvider.value = llmProvider === "ollama" ? "ollama" : "gemini";
+  dom.ollamaModel.value = ollamaModel ?? "";
 }
 
 // Must be called synchronously from a click: Chrome only shows the prompt during a user gesture.
@@ -133,8 +152,19 @@ function tabInfo(tab) {
   return { tabId: tab.id, title: tab.title, url: tab.url };
 }
 
+// Lets the background notice this panel closing, so it can clear the highlights it made. If the
+// service worker restarts the port drops while the panel is still open, so it reconnects.
+function holdPanelPort() {
+  try {
+    chrome.runtime.connect({ name: `panel:${windowId}` }).onDisconnect.addListener(() => setTimeout(holdPanelPort, 1000));
+  } catch {
+    /* extension reloaded or uninstalled: this panel is orphaned */
+  }
+}
+
 async function init() {
   ({ id: windowId } = await chrome.windows.getCurrent());
+  holdPanelPort();
   hasAllSites = await chrome.permissions.contains(ALL_SITES);
   const [tab] = await chrome.tabs.query({ active: true, windowId });
   if (tab) dispatch({ type: "tab-activated", ...tabInfo(tab) });
@@ -158,6 +188,7 @@ async function init() {
   // Clicking the toolbar icon grants activeTab, which makes the tab's title readable.
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type === "action-clicked") refreshTabInfo(message.tabId);
+    else if (message?.type === "relabel-progress") dispatch({ type: "relabel-progress", tabId: message.tabId, corpusId: message.corpusId, sections: message.sections });
   });
 
   // Granted here or revoked in Chrome's settings: titles of every known tab may have changed.
@@ -174,17 +205,19 @@ async function init() {
     findSections(dom.findInput.value.trim());
   });
   dom.settingsToggle.addEventListener("click", () => toggleSettings());
+  dom.llmProvider.addEventListener("change", () => chrome.storage.local.set({ llmProvider: dom.llmProvider.value }));
+  dom.ollamaModel.addEventListener("change", () => chrome.storage.local.set({ ollamaModel: dom.ollamaModel.value.trim() }));
   dom.settings.addEventListener("submit", async (e) => {
     e.preventDefault();
     const key = dom.geminiKey.value.trim();
     if (!key) return;
     await chrome.storage.local.set({ geminiApiKey: key });
     dom.geminiKey.value = "";
-    refreshKeyStatus();
+    loadSettings();
   });
   dom.geminiKeyClear.addEventListener("click", async () => {
     await chrome.storage.local.remove("geminiApiKey");
-    refreshKeyStatus();
+    loadSettings();
   });
 }
 

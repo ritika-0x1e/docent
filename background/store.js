@@ -68,6 +68,15 @@ async function getChunkVectors(corpusIds) {
   return perCorpus.flat();
 }
 
+// Rewrites section records in place (e.g. after "Retry headings"). Chunk vectors are untouched:
+// they never depend on generated headings.
+async function updateSections(corpusId, sections) {
+  const db = await openDb();
+  const tx = db.transaction("sections", "readwrite");
+  for (const s of sections) tx.store.put({ ...s, corpusId });
+  await tx.done;
+}
+
 async function listStoredCorpora() {
   const db = await openDb();
   return (await db.getAll("corpora")).sort((a, b) => b.scannedAt - a.scannedAt);

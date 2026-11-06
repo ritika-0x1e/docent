@@ -35,7 +35,7 @@ Background service worker
   → embeddings (Transformers.js, local, in a Web Worker hosted by an offscreen document — see §7.1)
   → vector store (IndexedDB, cosine similarity)
   → agent loop (tool-use: retrieve_sections, web_search)
-  → LLM calls (Gemini Flash free tier now; local Ollama later if quota becomes a problem)
+  → LLM calls (Gemini free tier: Flash-Lite for headings/summaries; local Ollama as fallback or alternative, §3.6)
         ↓
 Side panel UI (chrome.sidePanel)
   → thread/chat management
@@ -66,8 +66,10 @@ No dedicated backend server is required for v1. A Cloudflare Workers free-tier p
 ### 3.2 Sectioning
 - **Structured case**: split on existing `h1–h4`, and keep each section's location for later highlighting. (Readability renames `h1` to `h2` in its output, so in practice this is `h2`–`h4`.)
 - **Section location = per-block text-quote anchors, not one `Range`** (decided in Phase B planning, 2026-11-02). Each paragraph-level block in a section stores `{exact, prefix, suffix}`. Live `Range`s are rebuilt from these anchors inside the content script and never stored. A single heading-to-heading `Range` would also highlight the boilerplate Readability stripped between paragraphs. A `Range` also can't be messaged out of the content script or persisted, and F3 has to re-highlight a page after reload. The CSS Custom Highlight API accepts multiple ranges per highlight, so §3.8 is unaffected.
-- **Unstructured case**: no LLM needed to find boundaries. Embed paragraphs, walk sequentially, and break into a new section when cosine similarity to the running section centroid drops below a threshold (classic semantic-breakpoint chunking).
+- **Unstructured case**: no LLM needed to find boundaries. Embed paragraphs, walk sequentially, and break into a new section when cosine similarity to the running section centroid drops below a threshold (classic semantic-breakpoint chunking). The threshold is set per page from that page's own similarity profile (mean − 0.5 × sd; decided 2026-11-06), because a fixed value didn't carry across kinds of writing.
 - Only call the LLM **after** boundaries are fixed, to generate a heading + 1-line summary per section — keeps LLM usage cheap and deferred.
+- **Back-matter sections are dropped** (decided 2026-11-05, combined run test 7). Sections whose own heading, or any parent heading, is exactly References / Notes / Footnotes / Citations / Sources / Works cited / Bibliography / Further reading / External links (case-insensitive) don't become sections. They stay on the page, but aren't in the reading view or retrieval. Citation lists are long (about 4k words on Wikipedia's "White House") and only add noise. "See also" is kept. Not decided: Wikipedia infoboxes stay in the intro section for now (the user chose not to drop them).
+- **On demand since 2026-11-05:** a scan never calls the LLM. Sections show fallback headings until the user presses **Generate headings & summaries** in the panel. That reruns only B3 on the saved scan (no re-extraction, no re-embedding; chunk vectors never depend on generated headings) and retries just the sections still missing a summary. Reason: the free-tier quota (§3.6) is too small to spend on every scan.
 
 ### 3.3 Link harvesting for multi-page context (Wikipedia-style)
 Rejected an early version of this design that treated "nav vs inline" as "auto-crawl vs skip." That's the wrong axis — **location in the DOM doesn't determine relevance; user approval does.**
@@ -95,8 +97,11 @@ Revised approach:
 - Tag every crawled section with `{sourcePage, linkedFrom, viaAnchorText}` — needed for citation badges later.
 
 ### 3.6 LLM backend
-- **Gemini Flash free tier** for now — sufficient quota, supports tool-calling.
-- If/when quota becomes a real constraint, fall back to **local Ollama** (fully free, private, but requires the user to run a local server — acceptable for a personal tool, a bigger ask if distributing to others).
+- **Gemini free tier.** Supports tool-calling.
+- **Quota is a real constraint (2026-11-05, AI Studio):** on the free tier, every full Flash model (3, 3.6, 3.8) is capped at **5 RPM / 20 requests per day**. The user hit it after 5–6 test scans. Flash-Lite models get **15 RPM / 500 RPD** (`gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`).
+- **B3 (headings/summaries) uses `gemini-3.5-flash-lite`**, 30 sections per request, on demand (§3.2).
+- **Local Ollama (E5) is built for B3**, moved forward from phase 11 because quota became a real constraint. ⚙ settings choose either "Gemini Flash-Lite, with Ollama when its quota runs out" (falls back on any Gemini failure, i.e. 429, a 503 that persists after one retry, other HTTP errors or a network error, or when no key is set) or "Ollama only". It's fully free and private, but you have to run a local server. That's acceptable for a personal tool, a bigger ask if distributing to others. It needs no `OLLAMA_ORIGINS` change: the extension removes the `Origin` header from its own requests to `localhost:11434` (§7.1).
+- **Open for phase 6 (chat):** with 20 RPD on full Flash, chat can't rely on it. Decide then between Flash-Lite, Ollama, or a split (e.g. Flash for the final answer only). Not decided yet.
 
 ### 3.7 Retrieval + agent loop
 - Tool-use pattern: `retrieve_sections(query, k=5)` (cosine similarity over local embeddings) and `web_search(query)` (only invoked when the page's own corpus doesn't cover the question).
@@ -201,7 +206,7 @@ Each item below should be buildable and testable in isolation before integration
 - **E2.** `web_search(query)` tool — DuckDuckGo HTML fetch, sponsored-result filtering, top-3 extraction
 - **E3.** Selection-scoped answering mode (bypass retrieval when text is selected)
 - **E4.** Gemini Flash integration for the agent loop (tool-calling)
-- **E5.** (Later/optional) Local Ollama fallback path when Gemini quota is exhausted
+- **E5.** Local Ollama fallback path when Gemini quota is exhausted. *Built for B3 on 2026-11-05 (§3.6); still to extend to chat in phase 6.*
 
 ### F. Citation & highlighting
 - **F1.** CSS Custom Highlight API integration — highlight a `Range` on the live page
@@ -242,7 +247,7 @@ Recommended build sequence — each phase should be functional and testable befo
 8. **E2** — Web search tool: DDG fetch, sponsor filtering, top-3 cards, redirect-on-click
 9. **D1–D6** — Link harvesting, scoring, quota/backfill, picklist UI, approved-link crawling (most fragile piece — nav/inline heuristics will need real-world tuning against actual sites)
 10. **G4** — Soft cap warning once multi-page threads are common in testing
-11. **E5** — Local Ollama fallback (only if/when Gemini quota becomes a real constraint)
+11. **E5** — Local Ollama fallback (only if/when Gemini quota becomes a real constraint). *B3's part was pulled forward on 2026-11-05 once it did; chat's part follows phase 6.*
 
 Per-phase plans live in `docs/phased-implementation-plan/`, one file per phase.
 
@@ -266,6 +271,7 @@ Per-phase plans live in `docs/phased-implementation-plan/`, one file per phase.
 - **E2 (web search)**: add a single narrow static host_permission for `html.duckduckgo.com` when E2 is built (phase 8) — fixed, low-scope, known upfront.
 - **Phase B (embeddings)**: adds the `offscreen` permission and `'wasm-unsafe-eval'` in the extension-pages CSP (decided 2026-11-02). MV3 service workers can't spawn Web Workers, so the background creates an offscreen document (reason `WORKERS`), which hosts the embedding worker. ONNX Runtime runs as WebAssembly, so it needs the CSP entry. Neither grants access to any site.
 - **Phase 4 (side panel scanning), decided 2026-11-03 after CP-4-1:** `activeTab` is granted only by a click on the toolbar icon, never by a click inside the side panel. So Start scan failed on any tab the user had switched to. Fix: `optional_host_permissions: ["http://*/*", "https://*/*"]`, **requested once for all sites** (Chrome's own prompt), the first time Start scan hits a tab without access. If declined, the icon-click path still works. Nothing is granted at install, and the grant can be revoked in Chrome's extension settings. Rejected alternatives: a static `<all_urls>` grant (Chrome shows an install-time warning) and per-site prompts (too frequent for everyday use). This loosens the "no `<all_urls>` until phase 9" rule below. D6 (phase 9) reuses this grant when it's present and falls back to its per-origin request when it isn't.
+- **E5 (local Ollama, for B3), decided 2026-11-05:** `host_permissions: ["http://localhost:11434/*"]` plus `declarativeNetRequestWithHostAccess`. Ollama rejects any browser `Origin` not listed in `OLLAMA_ORIGINS`, and on a system-wide install, changing that needs root, which the user doesn't have. So a DNR **session rule** removes the `Origin` header, but only from this extension's own requests to `localhost:11434` (`initiatorDomains: [chrome.runtime.id]`). Websites keep Ollama's origin protection. The host permission lets the service worker read the reply. Rejected alternative: a second per-user Ollama server on another port with its own `OLLAMA_ORIGINS`, which would mean a 3.3 GB re-download and starting it manually.
 - Rationale (original): "minimum permissions per phase, no `<all_urls>` until phase 9", as in CLAUDE.md; avoids a standing broad grant for a personal/free-first tool. Since 2026-11-03 the one exception is the user-approved, revocable all-sites grant above.
 
 ### 7.2 Embedding model weights (decided 2026-11-02: download on first use)
@@ -298,3 +304,4 @@ Per-phase plans live in `docs/phased-implementation-plan/`, one file per phase.
   - Reusing B2's unit vectors for C chunks on headingless pages
   - Embedding visible/early sections first
   - A smaller model
+- **Ollama CPU threads for B3** (noted 2026-11-05 by the user during the combined run; do after the MVP). On the user's i5-1235U (2 performance + 8 efficiency cores) Ollama only uses the 2 performance cores (≈200% CPU), so a 27-section page takes roughly 5–8 min with `qwen2.5:1.5b`. Try `options.num_thread` (e.g. 8) in `buildOllamaBody` (`lib/section-prompt.js`): time one batch at the default vs 8 threads and keep the faster. Related: when Ollama is missing the model (404) or unreachable, stop at the first batch instead of failing every batch. Also, the user's Ollama 0.22.0 can't pull `gemma3:1b` (412, needs a newer Ollama; no sudo to upgrade the service).

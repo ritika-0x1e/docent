@@ -105,14 +105,15 @@ function scanOutcomeStage(scan) {
 }
 
 /**
- * A: extraction/anchoring/B1 in the content script, then B2 (if no headings), B3 ∥ C1, and C2 here.
+ * A: extraction/anchoring/B1 in the content script, then B2 (if no headings), C1 and C2 here.
+ * B3 (headings/summaries) is on demand since 2026-11-05 (the panel's "Generate headings"), so a scan
+ * never spends LLM quota; sections carry fallback headings and null summaries until then.
  * The finished sections are kept in session storage per tab, so the console helpers still work
  * after the service worker has been stopped and restarted.
  * @param {(progress: {stage: string}) => void} onProgress  stages: extracting, sectioning, sectioned,
- *   labelling (+ a "summaries" message per B3 batch), saving, then one of done | needs-force | blocked |
- *   source-error (errors are thrown)
+ *   embedding, saving, then one of done | needs-force | blocked | source-error (errors are thrown)
  */
-async function runScan(tabId, { force = false, llm = true } = {}, onProgress = () => {}) {
+async function runScan(tabId, { force = false } = {}, onProgress = () => {}) {
   onProgress({ stage: "extracting" });
   const scan = await attemptScan(tabId, { force });
   if (scan.blocked || scan.response?.status !== "ok") {
@@ -128,16 +129,11 @@ async function runScan(tabId, { force = false, llm = true } = {}, onProgress = (
     b2 = await sectionSemantically(response.blocks);
     raw = b2.sections;
   }
-  const finalized = finalizeSections(raw, response.blocks);
-  // Fallback headings for now; B3's generated headings and summaries arrive with "done".
-  onProgress({ stage: "sectioned", sections: applyResults(finalized, new Map()) });
+  const sections = applyResults(finalizeSections(raw, response.blocks), new Map()); // fallback headings
+  onProgress({ stage: "sectioned", sections });
 
-  // B3 and C1 run in parallel: chunk text uses only HTML headings, never generated ones.
-  onProgress({ stage: "labelling", detail: { sections: finalized.length } });
-  const [b3, embedded] = await Promise.all([
-    labelSections(finalized, response.article.title, { llm, onBatch: (sections) => onProgress({ stage: "summaries", sections }) }),
-    embedSectionChunks(finalized),
-  ]);
+  onProgress({ stage: "embedding", detail: { sections: sections.length } });
+  const embedded = await embedSectionChunks(sections);
 
   onProgress({ stage: "saving", detail: { chunks: embedded.chunks.length } });
   const tab = await chrome.tabs.get(tabId);
@@ -149,26 +145,25 @@ async function runScan(tabId, { force = false, llm = true } = {}, onProgress = (
       title: response.article.title,
       source: response.source,
       embeddingModel: embedded.stats.model,
-      sections: b3.sections,
+      sections,
       chunks: embedded.chunks,
     });
   } catch (err) {
     storeError = err.message; // sections stay usable in session storage; only persistence failed
   }
 
-  await chrome.storage.session.set({ [`scan:${tabId}`]: { url: tab.url, source: response.source, corpusId, sections: b3.sections } });
+  await chrome.storage.session.set({ [`scan:${tabId}`]: { url: tab.url, source: response.source, corpusId, sections } });
   const result = {
     ...scan,
-    sections: b3.sections,
+    sections,
     b2Stats: b2?.stats ?? null,
-    b3Stats: b3.stats,
     cStats: { corpusId, storeError, chunks: embedded.chunks.length, ...embedded.stats },
   };
   onProgress({
     stage: "done",
-    sections: b3.sections,
+    sections,
     corpusId,
-    detail: { source: response.source, title: response.article.title, b3Skipped: b3.stats.skipped ?? null, b3Errors: b3.stats.errors.length, storeError },
+    detail: { source: response.source, title: response.article.title, storeError },
   });
   return result;
 }

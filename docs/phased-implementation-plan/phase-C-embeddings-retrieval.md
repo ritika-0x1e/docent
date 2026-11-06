@@ -106,11 +106,11 @@ Background wrapper: `retrieve(corpusIds, queryText, k)` embeds the query, loads 
 
 ## Exit criteria for Phase C (ticked during the combined run, except unit tests and checkpoints)
 
-- [ ] `lib/chunk.js` and `lib/retrieval.js` unit tests pass
-- [ ] A scan writes one corpus with all its sections and chunk vectors in a single transaction; a scan that fails partway writes nothing
-- [ ] `query()` returns sensible top-5 sections on a headed page and a headingless page
-- [ ] Stored corpora survive a service-worker restart
-- [ ] No new permissions (IndexedDB is available to extensions without one)
+- [x] `lib/chunk.js` and `lib/retrieval.js` unit tests pass
+- [x] A scan writes one corpus with all its sections and chunk vectors in a single transaction; a scan that fails partway writes nothing *(checked by reading the code, not by injecting a failure: `saveCorpus` puts everything in one `readwrite` transaction and awaits `tx.done`, and the pipeline only calls it after embedding succeeds)*
+- [x] `query()` returns sensible top-5 sections on a headed page and a headingless page *(headed: CP-C1. Headingless: 2 of 3 question types pass; the late question misses in 2 of 3 phrasings. Accepted by the user on 2026-11-06 as a known limitation for MVP. See combined run item 11.)*
+- [x] Stored corpora survive a service-worker restart *(combined run item 12: a full browser restart)*
+- [x] No new permissions (IndexedDB is available to extensions without one)
 
 ## Build order inside the phase
 

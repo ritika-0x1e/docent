@@ -8,6 +8,10 @@
 
 function extractArticle() {
   const clone = document.cloneNode(true);
+  // MediaWiki (Wikipedia and other wikis) puts an "[edit]" link beside every heading. Kept, each
+  // becomes a one-word block that opens every section, and a parent heading with nothing else
+  // under it becomes a near-empty section (combined run, test 2). Removed from the clone only.
+  for (const el of clone.querySelectorAll(".mw-editsection")) el.remove();
   // serializer: return the content element itself rather than an HTML string, so B1 can walk
   // blocks directly — no re-parsing HTML, which would be a Trusted Types sink on strict pages.
   const reader = new Readability(clone, { serializer: (el) => el });

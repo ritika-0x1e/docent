@@ -28,7 +28,7 @@ async function getLastScan(tabId) {
   return (await chrome.storage.session.get(key))[key] ?? null;
 }
 
-function logSections({ response, sections, b2Stats, b3Stats, cStats }) {
+function logSections({ response, sections, b2Stats, cStats }) {
   const { stats } = response;
   const method = sections[0]?.method ?? "none";
   const anchored = stats.anchoredExact + stats.anchoredEdges;
@@ -47,12 +47,7 @@ function logSections({ response, sections, b2Stats, b3Stats, cStats }) {
       `[Summarizer/B2] ${b2Stats.units} units embedded; model load ${b2Stats.msModelLoad}ms, embed ${b2Stats.msEmbed}ms`
     );
   }
-  if (b3Stats.skipped) {
-    console.log(`[Summarizer/B3] skipped (${b3Stats.skipped}) — fallback headings used. ${b3Stats.skipped === "no-key" ? 'Set a key with setGeminiKey("…").' : ""}`);
-  } else {
-    console.log(`[Summarizer/B3] ${b3Stats.labelled}/${sections.length} sections labelled in ${b3Stats.batches} batches, ${b3Stats.ms}ms`);
-    for (const err of b3Stats.errors) console.warn("[Summarizer/B3]", err);
-  }
+  console.log("[Summarizer/B3] on demand: run generateHeadings(tabId), or press Generate headings in the panel");
 
   console.table(
     sections.map((s, i) => ({
@@ -83,7 +78,7 @@ function logSections({ response, sections, b2Stats, b3Stats, cStats }) {
 }
 
 async function runHarness(tabId, opts = {}) {
-  console.log(`[Summarizer/A] scanning tab ${tabId}${opts.force ? " (forced)" : ""}${opts.llm === false ? " (no LLM)" : ""}...`);
+  console.log(`[Summarizer/A] scanning tab ${tabId}${opts.force ? " (forced)" : ""}...`);
   const result = await runScan(tabId, opts);
 
   if (result.blocked) {
@@ -108,7 +103,7 @@ async function runHarness(tabId, opts = {}) {
 }
 
 // Exposed for manual testing from the service worker devtools console.
-globalThis.scan = (tabId, opts) => runHarness(tabId, opts); // opts: {llm: false} skips B3
+globalThis.scan = (tabId, opts) => runHarness(tabId, opts);
 globalThis.forceScan = (tabId, opts) => runHarness(tabId, { ...opts, force: true }); // A3 override
 
 globalThis.highlightSection = async (tabId, index) => {
@@ -120,9 +115,32 @@ globalThis.highlightSection = async (tabId, index) => {
   // insertCSS styles the highlight without touching the page DOM and isn't subject to page CSP.
   await chrome.scripting.insertCSS({ target: { tabId }, css: DEBUG_HIGHLIGHT_CSS });
   const result = await chrome.tabs.sendMessage(tabId, { type: "highlight-blocks", blockIds: section.blocks.map((b) => b.id) });
+  if (result?.ok) await rememberHighlight(tabId);
   console.log(`[Summarizer/B] highlightSection(${index}):`, result);
   return result;
 };
+
+// Highlights are cleared when the side panel that caused them closes. Tabs are recorded with their
+// window in session storage, so this survives a service-worker restart between highlight and close.
+const HIGHLIGHTED_KEY = "highlightedTabs"; // { [tabId]: windowId }
+
+async function rememberHighlight(tabId) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab) return;
+  const { [HIGHLIGHTED_KEY]: highlighted = {} } = await chrome.storage.session.get(HIGHLIGHTED_KEY);
+  await chrome.storage.session.set({ [HIGHLIGHTED_KEY]: { ...highlighted, [tabId]: tab.windowId } });
+}
+
+async function clearHighlightsInWindow(windowId) {
+  const { [HIGHLIGHTED_KEY]: highlighted = {} } = await chrome.storage.session.get(HIGHLIGHTED_KEY);
+  const remaining = {};
+  for (const [tabId, tabWindow] of Object.entries(highlighted)) {
+    if (tabWindow !== windowId) remaining[tabId] = tabWindow;
+    // The tab may have navigated (content script gone) or closed: nothing left to clear then.
+    else chrome.tabs.sendMessage(Number(tabId), { type: "clear-highlight" }).catch(() => {});
+  }
+  await chrome.storage.session.set({ [HIGHLIGHTED_KEY]: remaining });
+}
 
 globalThis.clearHighlight = (tabId) => chrome.tabs.sendMessage(tabId, { type: "clear-highlight" });
 
@@ -236,6 +254,17 @@ const panelHandlers = {
     if (section.jump) return jumpTo(tabId, index);
     return { ok: false, error: "This section can't be shown on the page." };
   },
+  // B3 on demand ("Generate headings"): label the saved scan's sections that have no summary yet,
+  // streaming each batch to the panel, then save in place. No re-extraction or re-embedding: chunk
+  // vectors never depend on generated headings. Also the retry path after a failure.
+  "panel-relabel": ({ tabId }) => generateHeadings(tabId),
+  // "Stop" while generating: aborts the running LLM request (Ollama drops the job when the connection
+  // closes); finished batches are kept. false if nothing is running, e.g. after a worker restart.
+  "panel-stop-relabel": async ({ tabId }) => {
+    const running = generations.get(tabId);
+    running?.abort();
+    return { ok: true, stopped: Boolean(running) };
+  },
   // Top-5 sections for a query, each with its best chunk's text as the snippet.
   "panel-find": async ({ tabId, query: text }) => {
     const scan = await getLastScan(tabId);
@@ -260,6 +289,52 @@ const panelHandlers = {
   },
 };
 
+const generations = new Map(); // tabId → AbortController of the running "Generate headings"
+
+async function generateHeadings(tabId) {
+  generations.get(tabId)?.abort(); // a second Generate for the same tab replaces the first
+  const controller = new AbortController();
+  generations.set(tabId, controller);
+  try {
+    return await generateHeadingsFor(tabId, controller.signal);
+  } finally {
+    if (generations.get(tabId) === controller) generations.delete(tabId);
+  }
+}
+
+async function generateHeadingsFor(tabId, signal) {
+  const scan = await getLastScan(tabId);
+  const stored = scan?.corpusId && (await getCorpus(scan.corpusId));
+  if (!stored) return { ok: false, error: "This tab's saved scan is gone. Scan it again." };
+
+  const { corpusId } = scan;
+  const pending = sectionsToRelabel(stored.sections);
+  const onBatch = (sections) => chrome.runtime.sendMessage({ type: "relabel-progress", tabId, corpusId, sections }).catch(() => {});
+  const b3 = await labelSections(pending, stored.corpus.title, { onBatch, signal });
+  const sections = mergeRelabelled(stored.sections, b3.sections);
+  await updateSections(corpusId, b3.sections);
+  await chrome.storage.session.set({ [`scan:${tabId}`]: { ...scan, sections } });
+
+  const { stats } = b3;
+  for (const err of stats.errors) console.warn("[Summarizer/B3]", err);
+  console.log(
+    stats.skipped
+      ? `[Summarizer/B3] skipped (${stats.skipped}): set a Gemini key or an Ollama model in the panel's ⚙`
+      : `[Summarizer/B3] ${stats.labelled}/${pending.length} sections labelled via ${stats.provider}${stats.fallback ? ` (fallback: ${stats.fallback})` : ""} in ${stats.batches} batches, ${stats.ms}ms${stats.stopped ? " (stopped)" : ""}`
+  );
+  return {
+    ok: true,
+    corpusId,
+    sections,
+    b3Skipped: stats.skipped ?? null,
+    b3Errors: stats.errors.length,
+    b3Provider: stats.provider,
+    b3Fallback: stats.fallback,
+    b3Stopped: stats.stopped,
+  };
+}
+globalThis.generateHeadings = generateHeadings;
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handler = panelHandlers[message?.type];
   if (!handler || sender.tab) return; // not ours, or from a content script
@@ -280,6 +355,13 @@ chrome.action.onClicked.addListener((tab) => {
 
 // H2: the panel starts scans over a "scan" port and gets progress back on it. If the panel closes
 // mid-scan the pipeline keeps going and the corpus is still saved; progress just has nowhere to go.
+// Each open panel holds a "panel:<windowId>" port; Chrome drops it when the panel closes.
+chrome.runtime.onConnect.addListener((port) => {
+  const match = /^panel:(\d+)$/.exec(port.name);
+  if (!match) return;
+  port.onDisconnect.addListener(() => clearHighlightsInWindow(Number(match[1])));
+});
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "scan") return;
   let connected = true;

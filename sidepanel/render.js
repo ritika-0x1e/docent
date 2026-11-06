@@ -6,7 +6,7 @@ const STAGE_TEXT = {
   extracting: () => "Reading the page…",
   sectioning: () => "Finding topic breaks…",
   sectioned: (tab) => `Found ${tab.sections.length} sections`,
-  labelling: (tab) => `Embedding ${tab.detail?.sections ?? ""} sections and writing headings…`,
+  embedding: (tab) => `Embedding ${tab.detail?.sections ?? ""} sections…`,
   saving: (tab) => `Saving ${tab.detail?.chunks ?? ""} chunks…`,
 };
 
@@ -93,21 +93,63 @@ function bannerFor(tab, { onForceScan, onAllowAccess, onOpenSettings }) {
     return { kind: "error", nodes: [el("p", { text: `Sections are shown but weren't saved: ${tab.detail.storeError}` })] };
   }
   // B3: skipped without a key, or some batches failed. Never blocks the scan; fallback headings are used.
-  if (tab.status === "ready" && tab.detail?.b3Skipped === "no-key") {
+  // B3 (on demand) went wrong. Generate stays available in the row below for another try.
+  if (tab.status === "ready" && tab.detail?.relabelError) {
+    return { kind: "warn", nodes: [el("p", { text: `Couldn't generate headings: ${tab.detail.relabelError}` })] };
+  }
+  if (tab.status === "ready" && (tab.detail?.b3Skipped === "no-key" || tab.detail?.b3Skipped === "no-ollama-model")) {
     return {
       kind: "warn",
       nodes: [
         el("p", {}, [
-          "No Gemini key set, so headings and summaries were skipped. ",
-          el("button", { type: "button", class: "link", text: "Add a key in ⚙", onclick: onOpenSettings }),
+          tab.detail.b3Skipped === "no-key" ? "No Gemini key or local model set. " : "Ollama is selected but no model is set. ",
+          el("button", { type: "button", class: "link", text: "Open ⚙ settings", onclick: onOpenSettings }),
         ]),
       ],
     };
   }
   if (tab.status === "ready" && tab.detail?.b3Errors > 0) {
-    return { kind: "warn", nodes: [el("p", { text: "Some headings and summaries couldn't be generated. The service-worker console has the details." })] };
+    return {
+      kind: "warn",
+      nodes: [el("p", { text: "Some headings and summaries couldn't be generated. The service-worker console has the details; Generate retries just those." })],
+    };
   }
   return null;
+}
+
+const PROVIDER_TEXT = { gemini: "Gemini Flash-Lite", ollama: "local Ollama" };
+const FALLBACK_TEXT = {
+  "gemini-quota": "Gemini's free quota was used up",
+  "gemini-overloaded": "Gemini was overloaded",
+  "gemini-error": "Gemini failed",
+  "no-gemini-key": "no Gemini key set",
+};
+
+// B3 on demand: a scan never calls the LLM. Shown on a ready tab while any section lacks a summary,
+// plus a note on which model did the last run.
+function genRowNodes(tab, { onGenerateHeadings, onStopGenerating }) {
+  if (tab?.status !== "ready" || !tab.sections?.length) return [];
+  const done = tab.sections.filter((s) => s.summary !== null).length;
+  const nodes = [];
+  if (tab.relabeling || done < tab.sections.length) {
+    nodes.push(
+      el("button", {
+        type: "button",
+        text: tab.relabeling ? `Generating… ${done}/${tab.sections.length}` : done ? `Generate the remaining ${tab.sections.length - done}` : "Generate headings & summaries",
+        disabled: tab.relabeling,
+        onclick: onGenerateHeadings,
+      })
+    );
+  }
+  if (tab.relabeling) nodes.push(el("button", { type: "button", text: "Stop", onclick: onStopGenerating }));
+  if (tab.detail?.b3Stopped && !tab.relabeling) nodes.push(el("span", { class: "muted small", text: "Stopped; finished sections were kept." }));
+  const provider = PROVIDER_TEXT[tab.detail?.b3Provider];
+  // Only when something was generated: a run stopped before its first batch names no model.
+  if (provider && !tab.relabeling && done > 0) {
+    const why = FALLBACK_TEXT[tab.detail.b3Fallback];
+    nodes.push(el("span", { class: "muted small", text: `Generated with ${provider}${why ? ` (${why})` : ""}` }));
+  }
+  return nodes;
 }
 
 // I2: one card per section. Generated headings get an "auto" tag so they aren't mistaken for the
@@ -131,7 +173,9 @@ function sectionCard(section, index, { onShowSection }, canShow) {
   if (action) {
     kids.push(el("div", { class: "card-actions" }, [el("button", { type: "button", class: "link", text: action, onclick: () => onShowSection(index) })]));
   }
-  return el("article", { class: "card" }, kids);
+  const card = el("article", { class: "card" }, kids);
+  card.dataset.sectionId = section.id;
+  return card;
 }
 
 // Live highlight where the text is anchored; Google Docs jump through the outline; else snippet only.
@@ -148,11 +192,13 @@ function idleHint(tab) {
   return "";
 }
 
-// Re-renders the cards only when the tab or its sections array changed, so open <details> and the
-// scroll position survive status-line updates. The reducer replaces the array on every real change.
+// Re-renders the cards only when the tab or its sections array changed. The reducer replaces the
+// array on every real change, including each B3 batch, so when the same tab re-renders, open
+// "Full text" sections and the scroll position are carried over instead of resetting.
 function renderReadingView(tabId, tab, container, handlers) {
   const sections = tab?.sections ?? null;
-  if (sections && container.__rendered?.tabId === tabId && container.__rendered.sections === sections) return;
+  const prev = container.__rendered;
+  if (sections && prev?.tabId === tabId && prev.sections === sections) return;
   container.__rendered = { tabId, sections };
 
   if (!sections) {
@@ -160,8 +206,16 @@ function renderReadingView(tabId, tab, container, handlers) {
     container.replaceChildren(...(hint ? [el("p", { class: "muted", text: hint })] : []));
     return;
   }
+
+  const sameTab = prev?.tabId === tabId && prev.sections;
+  const open = sameTab ? new Set([...container.querySelectorAll(".card")].filter((c) => c.querySelector("details")?.open).map((c) => c.dataset.sectionId)) : new Set();
+  const scrollTop = sameTab ? container.scrollTop : 0;
+
   // Show/jump read the saved scan, which only exists once the scan is done.
-  container.replaceChildren(...sections.map((s, i) => sectionCard(s, i, handlers, tab.status === "ready")));
+  const cards = sections.map((s, i) => sectionCard(s, i, handlers, tab.status === "ready"));
+  for (const card of cards) if (open.has(card.dataset.sectionId)) card.querySelector("details").open = true;
+  container.replaceChildren(...cards);
+  container.scrollTop = scrollTop;
 }
 
 // Decision 2: find-sections results — score, heading, best-chunk snippet, and a show/jump action.
@@ -194,7 +248,12 @@ function renderHeader(tab, dom, handlers) {
   dom.tabTitle.textContent = tab ? tab.title || "This tab" : "No tab";
   dom.status.textContent = tab ? statusText(tab) : "";
   dom.startScan.disabled = !tab || tab.status === "scanning";
+  dom.startScan.textContent = tab?.status === "ready" ? "Rescan" : "Start scan";
   dom.findInput.disabled = dom.findSubmit.disabled = tab?.status !== "ready" || !tab.corpusId;
+
+  const genNodes = genRowNodes(tab, handlers);
+  dom.genRow.hidden = genNodes.length === 0;
+  dom.genRow.replaceChildren(...genNodes);
 
   const banner = tab && bannerFor(tab, handlers);
   dom.banner.hidden = !banner;

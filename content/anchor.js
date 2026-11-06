@@ -98,8 +98,20 @@ function debugHighlight(blockIds) {
     .map((id) => globalThis.__summarizerRanges.get(id))
     .filter((r) => r && r.startContainer.isConnected);
   CSS.highlights.set("summarizer-debug", new Highlight(...ranges));
-  ranges[0]?.startContainer.parentElement?.scrollIntoView({ block: "center", behavior: "smooth" });
+  if (ranges[0]) scrollRangeIntoView(ranges[0]);
   return { ok: true, highlighted: ranges.length, requested: blockIds.length };
+}
+
+// Scrolls to the highlighted text itself. Scrolling its parent element misses on pages where one
+// element holds the whole article (paulgraham.com: a single <font> with <br>-separated paragraphs,
+// combined run test 8), which centred the middle of the essay instead.
+function scrollRangeIntoView(range) {
+  const rect = range.getClientRects()[0] ?? range.getBoundingClientRect();
+  if (!rect || (rect.width === 0 && rect.height === 0)) {
+    range.startContainer.parentElement?.scrollIntoView({ block: "center", behavior: "smooth" });
+    return;
+  }
+  window.scrollBy({ top: rect.top - window.innerHeight / 3, behavior: "smooth" });
 }
 
 function clearDebugHighlight() {

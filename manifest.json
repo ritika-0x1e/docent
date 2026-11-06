@@ -3,7 +3,8 @@
   "name": "Summarizer",
   "version": "0.1.0",
   "description": "Turns any tab into a scoped RAG chatbot over that page's content.",
-  "permissions": ["activeTab", "scripting", "sidePanel", "storage", "offscreen"],
+  "permissions": ["activeTab", "scripting", "sidePanel", "storage", "offscreen", "declarativeNetRequestWithHostAccess"],
+  "host_permissions": ["http://localhost:11434/*"],
   "optional_host_permissions": ["http://*/*", "https://*/*"],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"

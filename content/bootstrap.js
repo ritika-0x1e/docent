@@ -20,7 +20,7 @@ async function extractBlocks(source) {
   return {
     title: article?.title ?? document.title,
     excerpt: article?.excerpt ?? null,
-    blocks: parseBlocks(article?.content),
+    blocks: dropTrailingBackMatter(parseBlocks(article?.content)),
     measurements: measurePage(article),
     articleChars: normalizeText(article?.textContent || "").length,
   };
