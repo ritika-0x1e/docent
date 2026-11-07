@@ -17,9 +17,11 @@ async function extractBlocks(source) {
     return { title, excerpt: null, blocks, measurements: measureBlocks(blocks), articleChars: null };
   }
   const article = extractArticle();
+  const links = harvestLinks(article?.content ?? null); // D1: before parseBlocks reshapes the content
   return {
     title: article?.title ?? document.title,
     excerpt: article?.excerpt ?? null,
+    links,
     blocks: dropTrailingBackMatter(parseBlocks(article?.content)),
     measurements: measurePage(article),
     articleChars: normalizeText(article?.textContent || "").length,
@@ -37,7 +39,7 @@ async function handleScan(message) {
     if (err instanceof SourceError) return { status: "source-error", source: source.kind, reason: err.reason, error: err.message };
     throw err;
   }
-  const { title, excerpt, blocks, measurements, articleChars } = extracted;
+  const { title, excerpt, blocks, measurements, articleChars, links = [] } = extracted;
   const classifyResult = classifyPage(measurements);
   const article = { title, excerpt };
 
@@ -61,6 +63,7 @@ async function handleScan(message) {
     classifyResult,
     blocks: anchored,
     sections,
+    links, // D1 (phase 9): raw link occurrences, cleaned and scored in the background
     stats: {
       blocks: blocks.length,
       anchoredExact: anchored.filter((b) => b.match === "exact").length,

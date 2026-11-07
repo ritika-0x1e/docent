@@ -8,7 +8,7 @@
 const MODEL_LIST_KEY = "geminiFlashModels"; // { fetchedAt, models: [id…] } in chrome.storage.local
 const PARKED_KEY = "geminiParked"; // { [model]: until ms }: quota used up, skip until then
 const MODEL_LIST_TTL_MS = 24 * 3600 * 1000;
-const MAX_SOURCES = 8; // blended retrieval gives 4–8 sections; with a typo fix, both searches together are capped here
+const MAX_SOURCES = 8; // blended retrieval gives 5–9 sections, capped here (also with a typo fix)
 const SNIPPET_CHARS = 320;
 
 // The chat ladder from the API's model list, cached for a day. If the list can't be read, the two
@@ -38,13 +38,54 @@ async function parkModel(model, window) {
   console.log(`[Summarizer/E4] ${model}: ${window === "day" ? "daily" : "per-minute"} quota used up, skipped until ${new Date(parked[model]).toLocaleString()}`);
 }
 
+// Timeouts (user, 2026-11-07: "it can get stuck permanently"). Moving down the ladder only on an
+// error code isn't enough: a request can hang with no answer, or a stream can stop mid-way, and the
+// keep-alive below stops Chrome from ending the worker. So every wait has a limit.
+const GEMINI_FIRST_REPLY_MS = 25000; // no reply headers: try the next model
+const OLLAMA_FIRST_REPLY_MS = 120000; // local, reading ~2,000 words on a CPU before its first word
+const STREAM_STALL_MS = 45000; // nothing new mid-answer: keep what came, marked cut off
+
+class TimeoutError extends Error {
+  constructor(message, stage) {
+    super(message);
+    this.name = "TimeoutError";
+    this.stage = stage; // "reply" (nothing came) or "stall" (stopped mid-answer)
+  }
+}
+
+// fetch() that gives up if the reply hasn't started within ms (the caller's signal still aborts it).
+async function fetchWithReplyTimeout(url, init, ms, what) {
+  const timer = new AbortController();
+  const id = setTimeout(() => timer.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: init.signal ? AbortSignal.any([init.signal, timer.signal]) : timer.signal });
+  } catch (err) {
+    if (timer.signal.aborted && !init.signal?.aborted) throw new TimeoutError(`${what} didn't reply within ${ms / 1000}s.`, "reply");
+    throw err;
+  } finally {
+    clearTimeout(id);
+  }
+}
+
 // Reads a streamed body line by line ("data: {...}" for Gemini SSE, one JSON per line for Ollama).
-async function readLines(response, onLine) {
+// Gives up if nothing new arrives for stallMs.
+async function readLines(response, onLine, stallMs = STREAM_STALL_MS) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   for (;;) {
-    const { value, done } = await reader.read();
+    let stallTimer;
+    const stalled = new Promise((_, reject) => (stallTimer = setTimeout(() => reject(new TimeoutError(`The model stopped responding (nothing for ${stallMs / 1000}s).`, "stall")), stallMs)));
+    let chunk;
+    try {
+      chunk = await Promise.race([reader.read(), stalled]);
+    } catch (err) {
+      reader.cancel().catch(() => {});
+      throw err;
+    } finally {
+      clearTimeout(stallTimer);
+    }
+    const { value, done } = chunk;
     buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
     const lines = buffer.split("\n");
     buffer = done ? "" : lines.pop();
@@ -63,12 +104,12 @@ function withThinking(model, body) {
 
 async function streamGemini(model, body, key, onDelta, signal) {
   const send = (payload) =>
-    fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`, {
-      signal,
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": key },
-      body: JSON.stringify(payload),
-    });
+    fetchWithReplyTimeout(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`,
+      { signal, method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": key }, body: JSON.stringify(payload) },
+      GEMINI_FIRST_REPLY_MS,
+      `Gemini ${model}`
+    );
   let response = await send(withThinking(model, body));
   let json = null;
   if (response.status === 400) {
@@ -99,7 +140,17 @@ async function streamGemini(model, body, key, onDelta, signal) {
 }
 
 async function streamOllama(body, onDelta, signal) {
-  const response = await fetchOllama(body, { signal });
+  const timer = new AbortController();
+  const id = setTimeout(() => timer.abort(), OLLAMA_FIRST_REPLY_MS);
+  let response;
+  try {
+    response = await fetchOllama(body, { signal: signal ? AbortSignal.any([signal, timer.signal]) : timer.signal });
+  } catch (err) {
+    if (timer.signal.aborted && !signal?.aborted) throw new TimeoutError(`Local Ollama didn't start answering within ${OLLAMA_FIRST_REPLY_MS / 1000}s.`, "reply");
+    throw err;
+  } finally {
+    clearTimeout(id);
+  }
   let text = "";
   await readLines(response, (line) => {
     const chunk = JSON.parse(line);
@@ -116,7 +167,7 @@ async function streamOllama(body, onDelta, signal) {
 /**
  * Streams one answer: Gemini models down the ladder, then Ollama (E5).
  * @returns {Promise<{text, provider: "gemini"|"ollama", model, fallback: string|null}>}
- *   fallback: why Ollama answered ("gemini-quota" | "gemini-overloaded" | "gemini-error" | "no-gemini-key")
+ *   fallback: why Ollama answered ("gemini-quota" | "gemini-overloaded" | "gemini-timeout" | "gemini-error" | "no-gemini-key")
  */
 async function streamAnswer(request, onDelta, signal) {
   const { geminiKey, provider, ollamaModel } = await getLlmConfig();
@@ -145,6 +196,10 @@ async function streamAnswer(request, onDelta, signal) {
         }
         if (err.status === 503 || err.status === 500 || err.status === 404) {
           fallback = "gemini-overloaded";
+          continue;
+        }
+        if (err.name === "TimeoutError") {
+          fallback = "gemini-timeout"; // no reply: the next model may be fine
           continue;
         }
         fallback = "gemini-error"; // bad key, network error…: another model won't help
@@ -189,24 +244,29 @@ async function threadVocabulary(refs) {
 
 // Top hits for the question, and for its typo-corrected form when there is one: each section keeps
 // its better score.
+// The returned list carries gateScore: the best score for the question as typed. The relevance gate
+// uses only that, so a "correction" can't make an off-topic question look on-topic ("boiling point"
+// → "bowling paint" scored 0.207 on the White House page, just over the gate; phases 8–10 run).
 async function retrieveHits(refs, question) {
   const { hits } = await retrieve(refs, question, "blended");
+  const gateScore = hits[0]?.score ?? null;
   const corrected = correctQuery(question, await threadVocabulary(refs));
-  if (!corrected) return hits;
+  if (!corrected) return Object.assign(hits.slice(0, MAX_SOURCES), { gateScore });
   console.log(`[Summarizer/E1] also searching with ${corrected.fixes.map((f) => `"${f.from}" → "${f.to}"`).join(", ")}`);
   const best = new Map(hits.map((h) => [`${h.corpusId}|${h.sectionId}`, h]));
   for (const h of (await retrieve(refs, corrected.text, "blended")).hits) {
     const key = `${h.corpusId}|${h.sectionId}`;
     if (h.score > (best.get(key)?.score ?? -Infinity)) best.set(key, h);
   }
-  return [...best.values()].sort((a, b) => b.score - a.score).slice(0, MAX_SOURCES);
+  return Object.assign([...best.values()].sort((a, b) => b.score - a.score).slice(0, MAX_SOURCES), { gateScore });
 }
 
 // E1: the top sections across every page in the thread, with what the source cards need.
 async function retrieveSources(thread, question) {
   const pages = new Map(thread.pages.map((p) => [p.corpusRef, p]));
   const hits = await retrieveHits(corpusRefs(thread), question);
-  return hits.map((h) => {
+  const gateScore = hits.gateScore;
+  const sources = hits.map((h) => {
     const chunk = chunkSection(h.section)[h.bestChunkIndex]?.text ?? h.section.text;
     const page = pages.get(h.corpusId);
     return {
@@ -215,6 +275,7 @@ async function retrieveSources(thread, question) {
       order: h.section.order,
       pageUrl: page?.url ?? null,
       pageTitle: page?.title ?? null,
+      linkedFrom: page?.linkedFrom?.title ?? null, // phase 9: a page added from the picklist
       heading: h.section.heading,
       headingPath: h.section.headingPath ?? [],
       text: h.section.text,
@@ -225,6 +286,7 @@ async function retrieveSources(thread, question) {
       score: h.score,
     };
   });
+  return Object.assign(sources, { gateScore });
 }
 
 // Hallucination check (lib/grounding.js): each answer sentence against windows of the sources it was
@@ -296,12 +358,12 @@ async function findPassages(answerText, sources, cited, uncited) {
 // matches anything alone, so before giving up it's retried together with the previous question.
 async function retrieveRelevant(thread, question) {
   let sources = await retrieveSources(thread, question);
-  if (isRelevant(sources[0]?.score)) return { sources, relevant: true };
+  if (isRelevant(sources.gateScore)) return { sources, relevant: true };
   const previous = [...(thread.messages ?? [])].reverse().find((m) => m.role === "user")?.content;
   if (previous) {
     const withContext = await retrieveSources(thread, `${previous} ${question}`);
-    if (isRelevant(withContext[0]?.score)) return { sources: withContext, relevant: true };
-    if ((withContext[0]?.score ?? -1) > (sources[0]?.score ?? -1)) sources = withContext;
+    if (isRelevant(withContext.gateScore)) return { sources: withContext, relevant: true };
+    if ((withContext.gateScore ?? -1) > (sources.gateScore ?? -1)) sources = withContext;
   }
   return { sources, relevant: false };
 }
@@ -333,7 +395,7 @@ async function answerQuestion({ tabId, threadId, question, force = false }, { on
     } else {
       ({ sources, relevant } = await retrieveRelevant(thread, question));
     }
-    const topScore = mode === "retrieval" ? (sources[0]?.score ?? null) : null;
+    const topScore = mode === "retrieval" ? (sources.gateScore ?? sources[0]?.score ?? null) : null;
     onSources({ mode, count: relevant ? sources.length : 0 });
     console.log(
       `[Summarizer/E1] ${mode === "selection" ? `answering from the selection (${selection.split(" ").length} words), no retrieval` : `${sources.length} sources retrieved, best ${topScore?.toFixed(3)}${relevant ? "" : `: below ${RELEVANCE_MIN}, not covered, the model isn't asked`}${force ? " (ask anyway)" : ""}`}`
@@ -354,9 +416,12 @@ async function answerQuestion({ tabId, threadId, question, force = false }, { on
       try {
         answer = await streamAnswer({ question, history: thread.messages, sources, mode }, (d) => ((partial += d), onDelta(firstText(d))), signal);
       } catch (err) {
-        if (!signal?.aborted || !partial) throw err;
-        stopped = true; // Stop: keep what was written
-        answer = { text: partial, provider: null, model: null, fallback: null };
+        // Stop, or the model went quiet mid-answer: keep what was written.
+        const cutOff = err.name === "TimeoutError" && err.stage === "stall";
+        if (!partial || (!signal?.aborted && !cutOff)) throw err;
+        stopped = true;
+        if (cutOff) console.warn("[Summarizer/E4]", err.message);
+        answer = { text: partial, provider: null, model: null, fallback: null, cutOff };
       }
     }
 
@@ -415,7 +480,10 @@ async function answerQuestion({ tabId, threadId, question, force = false }, { on
       rejected, // the model's answer when the grounding check found none of it in the sources
       grounding: grounding && { verdict: grounding.verdict, unsupported: grounding.sentences.filter((s) => s.supported === false).map((s) => ({ text: s.text, support: s.support, missing: s.missing })) },
       uncited,
+      // E2 (phase 8): what "Search the web" will search, on answers the pages don't cover.
+      webQuery: notCovered ? buildSearchQuery(question, thread.title).query : null,
       stopped,
+      cutOff: Boolean(answer.cutOff), // stopped because the model went quiet, not by the user
       provider: answer.provider,
       model: answer.model,
       fallback: answer.fallback,

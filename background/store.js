@@ -29,7 +29,7 @@ function openDb() {
  * none of it is, so a scan that fails partway leaves nothing behind.
  * @returns {Promise<string>} corpusId — the corpusRef Thread.pages[] will point to (phase 5)
  */
-async function saveCorpus({ url, title, source, embeddingModel, sections, chunks }) {
+async function saveCorpus({ url, title, source, embeddingModel, sections, chunks, links = null, crawl = null }) {
   const corpusId = crypto.randomUUID();
   const db = await openDb();
   const tx = db.transaction(["corpora", "sections", "chunks"], "readwrite");
@@ -44,6 +44,8 @@ async function saveCorpus({ url, title, source, embeddingModel, sections, chunks
     chunkCount: chunks.length,
     embeddingModel,
     scannedAt: Date.now(),
+    links, // phase 9: scored links for the picklist (null: scanned before phase 9, or a crawled page)
+    crawl, // phase 9: {linkedFrom: {url, title}, viaAnchorText} for a page added from the picklist
   });
   sections.forEach((s, order) => tx.objectStore("sections").put({ corpusId, order, ...s }));
   for (const c of chunks) {

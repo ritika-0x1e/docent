@@ -24,6 +24,7 @@ const dom = {
   settingsStatus: document.getElementById("settings-status"),
   genRow: document.getElementById("gen-row"),
   llmProvider: document.getElementById("llm-provider"),
+  webEngine: document.getElementById("web-engine"),
   ollamaModel: document.getElementById("ollama-model"),
 };
 
@@ -53,6 +54,12 @@ const handlers = {
   onDeleteThread: () => onDeleteThread(),
   onAskAnyway: (question) => askQuestion(question, { force: true }),
   onCitation: (key, source, action) => toggleCitation(key, source, action),
+  onOpenPicklist: () => openPicklist(),
+  onWebSearch: (query) =>
+    chrome.runtime.sendMessage({ type: "panel-web-search", tabId: state.activeTabId, query }).then(
+      (r) => r?.ok || showToast("Couldn't open the search."),
+      () => showToast("Couldn't open the search.")
+    ),
 };
 
 function dispatch(event) {
@@ -70,7 +77,12 @@ function render() {
   const tab = activeTab(state);
   renderThreadRow(state, dom, handlers, { confirmingDelete });
   renderHeader(state, dom, handlers);
-  renderReadingView(state.activeTabId, tab, dom.readingView, handlers, threadView(state).mode);
+  if (picklist && picklist.tabId === state.activeTabId) {
+    if (picklist.view.el.parentElement !== dom.readingView) {
+      dom.readingView.replaceChildren(picklist.view.el);
+      dom.readingView.__rendered = null; // the sections render again once it closes
+    }
+  } else renderReadingView(state.activeTabId, tab, dom.readingView, handlers, threadView(state).mode);
   renderChat(state, { pending, failed, activeCitation, confirmingClear }, dom, handlers);
 }
 
@@ -215,6 +227,44 @@ async function onClearChat() {
   else showToast(result?.error ?? "Couldn't clear the chat.");
 }
 
+// D5/D6 (phase 9): the linked-pages picklist for the active tab, in the reading view's place.
+// {tabId, threadId, from, view} or null. Closing it while pages are being added only hides it; the
+// crawl runs on in the background and the thread updates as pages are added.
+let picklist = null;
+
+async function openPicklist() {
+  const tabId = state.activeTabId;
+  const data = await chrome.runtime.sendMessage({ type: "panel-links", tabId }).catch((err) => ({ ok: false, error: err.message }));
+  if (!data?.ok) return showToast(data?.error ?? "Couldn't list this page's links.");
+  if (!data.threadId) return showToast("Scan this page into a thread first.");
+  const view = createPicklist(data, {
+    onAdd: (links) => addLinkedPages(picklist, links),
+    onStop: () => chrome.runtime.sendMessage({ type: "panel-stop-crawl", threadId: data.threadId }).catch(() => {}),
+    onClose: () => closePicklist(),
+  });
+  picklist = { tabId, threadId: data.threadId, from: data.from, view };
+  render();
+  dom.readingView.scrollTop = 0;
+}
+
+function closePicklist() {
+  picklist = null;
+  render();
+}
+
+async function addLinkedPages(current, links) {
+  // Reading linked pages needs access to their site: ask now, while the click is a user gesture.
+  if (!hasAllSites && !(await requestAllSites())) {
+    current.view.setDone({ ok: false, error: "Site access is needed to read linked pages." });
+    return;
+  }
+  const result = await chrome.runtime
+    .sendMessage({ type: "panel-crawl", threadId: current.threadId, from: current.from, links })
+    .catch((err) => ({ ok: false, error: err.message }));
+  if (result?.thread) dispatch({ type: "thread-updated", thread: result.thread });
+  current.view.setDone(result ?? { ok: false, error: "No answer from the background." });
+}
+
 // Phase 7: the one citation highlighted on a page, {key: "<message createdAt>:<n>", tabId}, or null.
 let activeCitation = null;
 
@@ -284,7 +334,8 @@ function toggleSettings(open = dom.settings.hidden) {
 }
 
 async function loadSettings() {
-  const { geminiApiKey, llmProvider, ollamaModel } = await chrome.storage.local.get(["geminiApiKey", "llmProvider", "ollamaModel"]);
+  const { geminiApiKey, llmProvider, ollamaModel, webSearchEngine } = await chrome.storage.local.get(["geminiApiKey", "llmProvider", "ollamaModel", "webSearchEngine"]);
+  dom.webEngine.value = webSearchEngine ?? "duckduckgo";
   dom.settingsStatus.textContent = geminiApiKey ? "A key is saved." : "No key saved.";
   dom.llmProvider.value = llmProvider === "ollama" ? "ollama" : "gemini";
   dom.ollamaModel.value = ollamaModel ?? "";
@@ -458,7 +509,10 @@ async function init() {
   // Clicking the toolbar icon grants activeTab, which makes the tab's title readable.
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type === "action-clicked") refreshTabInfo(message.tabId);
-    else if (message?.type === "citation-cleared") {
+    else if (message?.type === "crawl-progress") {
+      if (picklist?.threadId === message.threadId) picklist.view.setProgress(message);
+      if (message.stage === "added" && message.thread) dispatch({ type: "thread-updated", thread: message.thread });
+    } else if (message?.type === "citation-cleared") {
       // Esc on the page cleared it.
       if (activeCitation) ((activeCitation = null), render());
     } else if (message?.type === "relabel-progress") dispatch({ type: "relabel-progress", tabId: message.tabId, corpusId: message.corpusId, sections: message.sections });
@@ -495,6 +549,7 @@ async function init() {
   setIcon(dom.chatStop, "stop", "Stop answering");
   dom.settingsToggle.addEventListener("click", () => toggleSettings());
   dom.llmProvider.addEventListener("change", () => chrome.storage.local.set({ llmProvider: dom.llmProvider.value }));
+  dom.webEngine.addEventListener("change", () => chrome.storage.local.set({ webSearchEngine: dom.webEngine.value }));
   dom.ollamaModel.addEventListener("change", () => chrome.storage.local.set({ ollamaModel: dom.ollamaModel.value.trim() }));
   dom.settings.addEventListener("submit", async (e) => {
     e.preventDefault();

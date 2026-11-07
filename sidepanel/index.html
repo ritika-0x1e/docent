@@ -41,6 +41,15 @@
         </div>
         <p class="muted small" id="settings-status" role="status"></p>
 
+        <label for="web-engine">Search the web with</label>
+        <p class="muted small">Used by "Search the web" on answers the pages don't cover. It opens a new tab.</p>
+        <select id="web-engine">
+          <option value="duckduckgo">DuckDuckGo</option>
+          <option value="google">Google</option>
+          <option value="bing">Bing</option>
+          <option value="brave">Brave Search</option>
+        </select>
+
         <label for="ollama-model">Ollama model</label>
         <p class="muted small">Leave empty to skip Ollama. Needs Ollama running on this computer (localhost:11434).</p>
         <div class="field-row">
@@ -70,9 +79,12 @@
     </section>
 
     <script src="../lib/threads.js"></script>
+    <script src="../lib/links.js"></script>
+    <script src="../lib/grounding.js"></script>
     <script src="icons.js"></script>
     <script src="../lib/panel-state.js"></script>
     <script src="render.js"></script>
+    <script src="picklist.js"></script>
     <script src="panel.js"></script>
   </body>
 </html>

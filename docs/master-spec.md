@@ -93,6 +93,7 @@ Revised approach:
 - Add a text filter box above the picklist — even a well-ranked top-20 might miss a link you're specifically looking for in a long article.
 
 ### 3.5 Crawling approved links
+- **As built (phase 9, 2026-11-07, user-approved):** the background fetches the page, and the offscreen document (a `DOM_PARSER` reason; a service worker has no DOMParser) runs the same Readability → blocks → B1 steps. No tabs open. Pages that build their text with JavaScript are listed as couldn't-read. A crawled page is a full page of the thread: it counts, chat searches it, and its citations say "(linked from …)". Its sections are anchored from their own text when the page is opened. It's reached from an "Add linked pages" button, never shown automatically. Details: `docs/phased-implementation-plan/phase-9-10-linked-pages.md`.
 - For each approved URL only: `fetch()` in background → Readability → sectioning → embed → merge into the **thread's** corpus (not just this page's).
 - Tag every crawled section with `{sourcePage, linkedFrom, viaAnchorText}` — needed for citation badges later.
 
@@ -138,6 +139,7 @@ Revised approach:
   - Details: `docs/phased-implementation-plan/phase-7-citations.md`.
 
 ### 3.9 Web search fallback (decided: redirect-only, no crawling of results)
+- **Changed 2026-11-07 (phase 8, user):** DuckDuckGo's HTML endpoint answers the extension's requests with a bot challenge (GET) or a 403 (POST, and the lite endpoint too), so nothing below about fetching and parsing results is built. Instead, a **Search the web** button on "not covered" answers opens the question (plus the thread's title when it's vague) as a normal results page in a new tab, with DuckDuckGo by default and the engine selectable in ⚙. Nothing is fetched or parsed, and no permission is added. Brave Search API cards stay a possible later addition. Details: `docs/phased-implementation-plan/phase-8-web-search.md`.
 - No paid API needed. Background service worker does a plain `fetch()` against DuckDuckGo's HTML endpoint (`html.duckduckgo.com/html/`) — lighter than Google's SERP, no JS requirement. Flagged as unofficial/could break if DDG changes markup; Brave Search API (small free tier) is the fallback if so.
 - **Filter out sponsored/ad result blocks** before extracting anything.
 - Take the **top 3 organic results only** — `{title, url, snippet}` straight from the SERP, no visiting the target site.
@@ -155,7 +157,7 @@ Revised approach:
   ```
 - When you follow a search result or an approved link to a new page, you manually attach that tab's session to an existing thread (or start fresh) — the *user* chains context across pages, not the agent autonomously crawling the open web.
 - Retrieval, once attached, searches across all linked pages' sections together as one pool — no special merge logic needed beyond a bigger candidate set for the same top-k search.
-- Soft cap of ~6–8 linked pages per thread — mainly to keep the picklist/citation UI usable, not because retrieval would break past that.
+- Soft cap of ~6–8 linked pages per thread — mainly to keep the picklist/citation UI usable, not because retrieval would break past that. **As built (phase 10, 2026-11-07):** warn past 8 (in the picklist, and the page count turns amber), never block.
 
 ### 3.11 Scan button (decided: explicit trigger, avoids double work)
 On side panel open, nothing runs automatically (except loading a page that's already saved in its thread, see below). UI shows:
@@ -185,7 +187,7 @@ Behavior matrix:
     - **Reattach.** After ×, a reattach icon appears, and only then.
     - **In the thread.** When the page is in its thread (scanned there, or saved there before), the thread's name is a heading, with the page count and a delete icon.
     - **New thread.** Nothing is shown.
-    - Hovering the name lists the thread's pages in order, plus the current page if it isn't in the thread yet.
+    - Hovering the name lists the thread's pages in order, plus the current page if it isn't in the thread yet. **Revised 2026-11-07 (user):** the card lists every page, so it always matches the count: the path up to this page, later pages muted, and pages added from links apart. It's shown when the thread has 2+ pages.
     - A page some thread already holds links to it when revisited.
     - The links live in `chrome.storage.session` (`background/tab-threads.js`), so they work with the panel closed, and a browser restart forgets them. All thread buttons are icons with hover labels.
     - **Consequence (accepted):** an old thread can't be opened from an unrelated tab. You reach it by revisiting one of its pages. This replaces the §3.11 sketch's "Recent threads" list (G2), and H4 works through a continued tab.
@@ -298,6 +300,7 @@ Per-phase plans live in `docs/phased-implementation-plan/`, one file per phase.
   - The combined checklist is in `phase-4-side-panel-shell.md`.
 - **Reminder for anyone resuming this work:** if phases 2–4 are built but the combined run hasn't been ticked off in `phase-4-side-panel-shell.md`, run it before starting phase 5. If a phase 2–4 checkpoint is unticked, run it before building the next phase.
 - From phase 5 on, testing goes back to per-phase, unless a new exception is agreed and recorded here.
+- **Exception 2 (2026-11-07, user): phases 8, 9 and 10 (web search, link picklist, soft cap) are built back to back and tested in one combined run at the end of phase 10.** Unit tests still run in every phase.
 
 ---
 
@@ -306,7 +309,7 @@ Per-phase plans live in `docs/phased-implementation-plan/`, one file per phase.
 ### 7.1 Manifest V3 permissions & host_permissions strategy
 - Base manifest requests only `activeTab`, `scripting`, `sidePanel`, `storage` — no upfront host_permissions. (`scripting` added during Phase A planning — required for programmatic `chrome.scripting.executeScript` injection, the mechanism this strategy relies on to avoid a standing `content_scripts` grant.)
 - **D6 (crawl approved links)**: request `optional_host_permissions` at runtime, per-origin, at the moment a link is approved in the picklist — never a standing grant for origins the user hasn't actually approved.
-- **E2 (web search)**: add a single narrow static host_permission for `html.duckduckgo.com` when E2 is built (phase 8) — fixed, low-scope, known upfront.
+- **E2 (web search)**: ~~add a static host_permission for `html.duckduckgo.com`~~. Not needed: since 2026-11-07 web search only opens a search tab (§3.9), so no permission is added.
 - **Phase B (embeddings)**: adds the `offscreen` permission and `'wasm-unsafe-eval'` in the extension-pages CSP (decided 2026-11-02). MV3 service workers can't spawn Web Workers, so the background creates an offscreen document (reason `WORKERS`), which hosts the embedding worker. ONNX Runtime runs as WebAssembly, so it needs the CSP entry. Neither grants access to any site.
 - **Phase 4 (side panel scanning), decided 2026-11-03 after CP-4-1:** `activeTab` is granted only by a click on the toolbar icon, never by a click inside the side panel. So Start scan failed on any tab the user had switched to. Fix: `optional_host_permissions: ["http://*/*", "https://*/*"]`, **requested once for all sites** (Chrome's own prompt), the first time Start scan hits a tab without access. If declined, the icon-click path still works. Nothing is granted at install, and the grant can be revoked in Chrome's extension settings. Rejected alternatives: a static `<all_urls>` grant (Chrome shows an install-time warning) and per-site prompts (too frequent for everyday use). This loosens the "no `<all_urls>` until phase 9" rule below. D6 (phase 9) reuses this grant when it's present and falls back to its per-origin request when it isn't.
 - **E5 (local Ollama, for B3), decided 2026-11-05:** `host_permissions: ["http://localhost:11434/*"]` plus `declarativeNetRequestWithHostAccess`. Ollama rejects any browser `Origin` not listed in `OLLAMA_ORIGINS`, and on a system-wide install, changing that needs root, which the user doesn't have. So a DNR **session rule** removes the `Origin` header, but only from this extension's own requests to `localhost:11434` (`initiatorDomains: [chrome.runtime.id]`). Websites keep Ollama's origin protection. The host permission lets the service worker read the reply. Rejected alternative: a second per-user Ollama server on another port with its own `OLLAMA_ORIGINS`, which would mean a 3.3 GB re-download and starting it manually.

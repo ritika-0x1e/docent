@@ -90,7 +90,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status !== "loading" || !pendingOpeners.has(tabId)) return;
   const openerTabId = pendingOpeners.get(tabId);
   pendingOpeners.delete(tabId);
-  if (!WEB_URL.test(changeInfo.url || tab.url || "")) return;
+  if (!WEB_URL.test(changeInfo.url || tab.url || tab.pendingUrl || "")) return;
   const opener = (await readTabThreads())[openerTabId];
   if (opener?.threadId) await setTabThread(tabId, { threadId: opener.threadId });
 });

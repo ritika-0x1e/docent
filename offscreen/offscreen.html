@@ -5,7 +5,13 @@
     <title>Summarizer offscreen</title>
   </head>
   <body>
-    <!-- Never shown. Exists only to host the embedding Web Worker (see offscreen.js). -->
+    <!-- Never shown. Hosts the embedding Web Worker (offscreen.js) and reads fetched linked pages
+         for phase 9 (extract.js, with the same extraction code the content script uses). -->
     <script src="offscreen.js"></script>
+    <script src="../content/vendor/readability.js"></script>
+    <script src="../lib/text.js"></script>
+    <script src="../lib/sections-headings.js"></script>
+    <script src="../content/blocks.js"></script>
+    <script src="extract.js"></script>
   </body>
 </html>

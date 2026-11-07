@@ -16,6 +16,7 @@ const CONTENT_FILES = [
   "content/blocks.js",
   "content/anchor.js",
   "content/citations.js",
+  "content/links.js",
   "content/sources.js",
   "content/bootstrap.js",
 ];
@@ -154,6 +155,8 @@ async function runScan(tabId, { force = false } = {}, onProgress = () => {}) {
       embeddingModel: embedded.stats.model,
       sections,
       chunks: embedded.chunks,
+      // D1–D3 (phase 9): this page's links, cleaned and scored, for "Add linked pages".
+      links: scoreLinks(cleanLinks(response.links ?? [], { pageUrl: tab.url })),
     });
   } catch (err) {
     storeError = err.message; // sections stay usable in session storage; only persistence failed

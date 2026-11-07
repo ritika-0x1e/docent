@@ -109,4 +109,6 @@ Implementation plan for build-sequence step 7 in `docs/master-spec.md` §6: **F1
 ## Exit criteria for phase 7
 - [x] Decisions 1–4 signed off *(2026-11-07, all as proposed)*
 - [x] `npm test` passes, with new tests for passage matching (a pure function in `lib/`) *(135/135)*
-- [ ] Checks 1–8 pass *(automated: 1–5 and 7 pass; 6 and 8 not rerun; your check with Gemini answers to do)*
+- [x] Checks 1–8 pass *(automated: 1–5 and 7 pass; 6 and 8 not rerun, the user decided they aren't needed)*
+
+**Phase 7 done (2026-11-07, user).**

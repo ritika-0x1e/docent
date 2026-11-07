@@ -19,6 +19,8 @@ importScripts(
   "../lib/grounding.js",
   "../lib/passages.js",
   "../lib/spelling.js",
+  "../lib/web-search.js",
+  "../lib/links.js",
   "citation-styles.js",
   "vendor/idb.js",
   "sectioning.js",
@@ -27,6 +29,7 @@ importScripts(
   "store.js",
   "tab-threads.js",
   "retriever.js",
+  "crawl.js",
   "chat.js"
 );
 
@@ -373,6 +376,48 @@ const panelHandlers = {
   "panel-detach-thread": async ({ tabId }) => ({ ok: true, ...(await detachTabThread(tabId)) }),
   "panel-reattach-thread": async ({ tabId }) => ({ ok: true, ...(await reattachTabThread(tabId)) }),
   // Decision 3: removes the thread and every corpus it points to; tabs linked to it start fresh.
+  // E2 (phase 8): "Search the web" opens the query as a results page in a new tab next to this one, a
+  // plain redirect (nothing is fetched or read). Opened from this tab, so it continues the thread
+  // (decision 4, tab-threads.js opener rule).
+  "panel-web-search": async ({ tabId, query }) => {
+    const from = await chrome.tabs.get(tabId).catch(() => null);
+    const { webSearchEngine } = await chrome.storage.local.get("webSearchEngine");
+    const tab = await chrome.tabs.create({ url: searchUrl(query, webSearchEngine), active: true, ...(from ? { index: from.index + 1, windowId: from.windowId, openerTabId: tabId } : {}) });
+    // Linked here rather than by the opener rule, which looks at the new tab's address on its first
+    // load and can miss a tab created this way (phases 8–10 run).
+    const { threadId } = await tabThread(tabId);
+    if (threadId) await setTabThread(tab.id, { threadId });
+    console.log(`[Summarizer/E2] web search opened in tab ${tab.id}: "${query}" (${SEARCH_ENGINES[webSearchEngine]?.name ?? "DuckDuckGo"})`);
+    return { ok: true, tabId: tab.id };
+  },
+  // D5 (phase 9): this tab's linked pages for the picklist: the top 20 (D4) and every link (for the
+  // filter), minus pages already in the thread. Scans from before phase 9 have no links saved.
+  "panel-links": async ({ tabId }) => {
+    const scan = await getLastScan(tabId);
+    const stored = scan?.corpusId ? await getCorpus(scan.corpusId) : null;
+    if (!stored) return { ok: false, error: "Scan this page first." };
+    if (!Array.isArray(stored.corpus.links)) return { ok: false, rescan: true, error: "This page was scanned before linked pages existed. Rescan it to list them." };
+    const thread = scan.threadId ? await getThread(scan.threadId) : null;
+    // Links already in the thread stay listed, ticked and disabled (user, 2026-11-07): the picklist is
+    // where you see which linked pages were added. They're pinned first; the top 20 are from the rest.
+    const inThread = new Set((thread?.pages ?? []).map((p) => normalizeUrl(p.url)));
+    const all = stored.corpus.links.map((l) => ({ ...l, inThread: inThread.has(normalizeUrl(l.url)) }));
+    const top = [...all.filter((l) => l.inThread), ...allocatePicklist(all.filter((l) => !l.inThread))];
+    return { ok: true, threadId: thread?.id ?? null, threadPages: thread?.pages.length ?? 0, from: { url: stored.corpus.url, title: stored.corpus.title }, top, all };
+  },
+  // D6: add the ticked pages. Progress goes out as "crawl-progress" messages; the reply is the result.
+  "panel-crawl": async ({ threadId, from, links }) => {
+    try {
+      const result = await crawlLinks({ threadId, from, links }, (progress) => chrome.runtime.sendMessage({ type: "crawl-progress", threadId, ...progress }).catch(() => {}));
+      return { ok: true, ...result };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  },
+  "panel-stop-crawl": async ({ threadId }) => {
+    crawls.get(threadId)?.abort();
+    return { ok: true };
+  },
   // Clear chat: the thread's conversation goes; its pages and scans stay. Not while it's answering.
   "panel-clear-chat": async ({ threadId }) => {
     if ([...liveChats.values()].some((live) => live.threadId === threadId)) return { ok: false, error: "Wait for the answer to finish, or stop it, first." };
@@ -523,6 +568,7 @@ chrome.runtime.onConnect.addListener((port) => {
           signal: live.controller.signal,
           onSources: (info) => {
             live.mode = info.mode;
+            live.status = info.mode === "selection" ? "Reading your selection…" : info.count ? `Read ${info.count} sections. Writing…` : "Writing…";
             broadcast(live, { chatId, type: "sources", ...info });
           },
           onDelta: (text) => {

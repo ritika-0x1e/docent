@@ -97,12 +97,33 @@ The user asked for stricter guards. All three are local and add no LLM call (`li
    - Nothing found in the sources: shown as "The sources don't cover this.", with the model's text folded away ("none of it is in the sources"). History passes "not covered" on, so later answers don't build on it.
    - Some sentences not found: those get a wavy underline and a note.
    - **Word check (2026-11-07):** a sentence is also found if ≥ 80% of its content words are in the sources (short list items copied from the page scored ~0.2 on similarity and were wrongly underlined). Numbers must match either way.
-   - `SUPPORT_MIN = 0.5` is **a placeholder**: its measurement run was stopped because it was blocking the user's Ollama. To measure before relying on the "partly" marks.
+   - **`SUPPORT_MIN = 0.5`, measured 2026-11-07.** 5 pages (White House, MDN, Python docs, React docs, Photosynthesis). True claims: real source sentences reworded, or cut to short list-style notes, by qwen (51). Made-up claims: qwen answering near-topic questions the pages don't cover, from memory, checked against what retrieval gave for that question (58 sentences, 20 answers). With the word check:
+
+     | Cutoff | True kept | Made-up sentences caught | Made-up answers underlined | Made-up answers hidden |
+     |---|---|---|---|---|
+     | 0.45 | 92% | 47% | 14/20 | 7/20 |
+     | **0.5** | **90%** | **60%** | **14/20** | **8/20** |
+     | 0.55 | 82% | 72% | 17/20 | 10/20 |
+     | 0.6 | 76% | 83% | 19/20 | 13/20 |
+
+     Three of the five true claims flagged at 0.5 were paraphrases that had lost the meaning. The scores overlap (true median 0.70, made-up 0.46), so no cutoff separates them cleanly. 0.5 favours few false underlines, which the user asked for. The number check catches made-up figures regardless.
 3. **The rule is repeated after the question** in the prompt, because small models follow the end of the message more than the system prompt.
 
 Also from the user's testing:
 - **Speed:** full Flash models think at "medium" by default and the thinking isn't shown. Chat now asks Flash models for `thinkingLevel: "low"` (3.8's lowest), leaves Flash-Lite at its default "minimal", and retries without the setting if a model rejects it. `maxOutputTokens` went from 1024 to 4096, because the cap includes thinking. The log line has timings (sources, first text, answer, check).
 - A "not covered" reply from the model shows the sections it was given, folded (phase 7).
+
+## Timeouts and partial answers (2026-11-07, from the user's testing)
+- **Nothing can hang for good any more.** Before, the ladder only moved on an error code, so a request that never answered (with the keep-alive holding the worker up) would wait forever.
+  - Gemini with no reply in **25 s**: the next model on the ladder, then Ollama ("Gemini didn't respond").
+  - Ollama with no reply in **120 s**: an error.
+  - A reply that goes quiet mid-answer for **45 s**: the text so far is kept, marked "Cut off: the model stopped responding".
+  - The local embedding step after **90 s**: an error instead of "Finding sources…" for good.
+  - Tested with a local server that never answers, and one that goes quiet after a line.
+- **A panel reopened mid-answer** shows the real status, not "Finding sources…".
+- **Partial answers.** The prompt used to say "not covered" whenever the answer wasn't fully there, so a two-part question ("when was it built, and how many times was it restored?") got a flat refusal. Now the model answers the part the sources cover and says which part they don't. "Not covered" is only for none of it.
+- **At least 5 sections** again: blended retrieval is now the plain top 5 plus the centred top 4 (capped at 8). It gave 4 when the two rankings overlapped.
+- **Answer sentences** now split like source text ("Chester A. Arthur" isn't two sentences). The split had cut a cited claim in half, so its citation fell back to the whole section.
 
 ## Exit criteria for phase 6
 - [x] Decisions 1–4 signed off *(2026-11-07; decision 1 as the model ladder)*

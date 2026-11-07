@@ -124,15 +124,18 @@ const FALLBACK_TEXT = {
   "gemini-quota": "Gemini's free quota was used up",
   "gemini-overloaded": "Gemini was overloaded",
   "gemini-error": "Gemini failed",
+  "gemini-timeout": "Gemini didn't respond",
   "no-gemini-key": "no Gemini key set",
 };
 
 // B3 on demand: a scan never calls the LLM. Shown on a ready tab while any section lacks a summary,
 // plus a note on which model did the last run.
-function genRowNodes(tab, { onGenerateHeadings, onStopGenerating }) {
+function genRowNodes(tab, { onGenerateHeadings, onStopGenerating, onOpenPicklist }) {
   if (tab?.status !== "ready" || !tab.sections?.length) return [];
   const done = tab.sections.filter((s) => s.summary !== null).length;
   const nodes = [];
+  // D5 (phase 9, decision 2): the picklist opens only from here, never by itself.
+  if (tab.threadId && onOpenPicklist) nodes.push(el("button", { type: "button", text: "Add linked pages", title: "Pick pages linked from this one to add to the thread", onclick: onOpenPicklist }));
   if (tab.relabeling || done < tab.sections.length) {
     nodes.push(
       el("button", {
@@ -245,14 +248,14 @@ function inlineNodes(text, onCite, valid) {
 }
 
 // Sentences the grounding check didn't find in the sources (lib/grounding.js) are underlined. They're
-// matched the way the check split them: per line, at sentence ends, without bullets, bold or numbering.
-const SENTENCE_END = /(?<=[.!?](?:\*\*)?)\s+(?=(?:\*\*)?[A-Z0-9"“(])/;
+// matched the way the check split them (lib/grounding.js splitSentences): per line, at sentence ends,
+// without bullets, bold or numbering.
 const sentenceKey = (segment) => segment.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, "").replace(/\*\*/g, "").trim();
 
 function lineNodes(line, onCite, valid, unsupported) {
   if (!unsupported?.size) return inlineNodes(line, onCite, valid);
   const nodes = [];
-  line.split(SENTENCE_END).forEach((segment, i) => {
+  splitSentences(line).forEach((segment, i) => {
     if (i > 0) nodes.push(document.createTextNode(" "));
     const inner = inlineNodes(segment, onCite, valid);
     if (unsupported.has(sentenceKey(segment))) nodes.push(el("span", { class: "unsupported", title: "Not found in the sources" }, inner));
@@ -324,7 +327,7 @@ function sourceCard(source, tab, handlers, { messageKey, activeKey }) {
   const active = activeKey === key;
   const action = citationAction(source, tab, active);
   const body = [];
-  if (!isHere(source, tab) && source.pageTitle) body.push(el("div", { class: "page-badge", text: source.pageTitle, title: source.pageUrl ?? source.pageTitle }));
+  if (!isHere(source, tab) && source.pageTitle) body.push(el("div", { class: "page-badge", text: source.linkedFrom ? `${source.pageTitle} (linked from ${source.linkedFrom})` : source.pageTitle, title: source.pageUrl ?? source.pageTitle }));
   body.push(el("div", { class: "source-heading", text: source.heading ?? "Untitled section" }));
   if (source.snippet) body.push(el("p", { class: "snippet", text: source.snippet }));
   if (action) body.push(el("button", { type: "button", class: "link small", text: action.label, onclick: () => handlers.onCitation(key, source, action) }));
@@ -370,12 +373,24 @@ function chatMessage(message, tab, handlers, { question = null, last = false, ac
   if (message.pending && message.checking) node.append(el("p", { class: "muted typing small", text: "Checking the answer against the sources…" }));
   if (message.error) node.append(el("p", { class: "msg-error", text: message.error }));
 
+  // E2 (phase 8): on an answer the pages don't cover, search the web in a new tab. Nothing is sent
+  // anywhere until it's clicked.
+  const webButton = () =>
+    message.webQuery && handlers.onWebSearch
+      ? el("button", { type: "button", class: "link small web-search", text: "Search the web", title: `Opens a search for: ${message.webQuery}`, onclick: () => handlers.onWebSearch(message.webQuery) })
+      : null;
+
   // Hallucination control (lib/grounding.js), said plainly under the answer.
   if (message.gated) {
     const kids = [el("span", { text: "No part of the pages is close to this question, so the model wasn't asked." })];
     if (last && question && handlers.onAskAnyway) kids.push(el("button", { type: "button", class: "link small", text: "Ask anyway", onclick: () => handlers.onAskAnyway(question) }));
+    const web = webButton();
+    if (web) kids.push(web);
     node.append(el("div", { class: "grounding-note" }, kids));
-  } else if (message.rejected) {
+  } else if (message.notCovered && webButton()) {
+    node.append(el("div", { class: "web-row" }, [webButton()]));
+  }
+  if (message.rejected) {
     node.append(
       el("details", { class: "rejected" }, [
         el("summary", { text: "The model answered, but none of it is in the sources" }),
@@ -390,7 +405,7 @@ function chatMessage(message, tab, handlers, { question = null, last = false, ac
 
   const notes = [];
   if (message.mode === "selection") notes.push("From your selection");
-  if (message.stopped) notes.push("Stopped");
+  if (message.stopped) notes.push(message.cutOff ? "Cut off: the model stopped responding" : "Stopped");
   const label = modelLabel(message);
   if (label) notes.push(`${label}${FALLBACK_TEXT[message.fallback] ? ` (${FALLBACK_TEXT[message.fallback]})` : ""}`);
   if (notes.length) node.append(el("div", { class: "msg-meta", text: notes.join(" · ") }));
@@ -457,35 +472,47 @@ function renderChat(state, { pending, failed, activeCitation, confirmingClear },
   if (nearBottom || pending) dom.chatLog.scrollTop = dom.chatLog.scrollHeight;
 }
 
-// Hover card for the thread name: the path to this page, i.e. the thread's pages in the order they
-// joined, up to and including this one (pages that joined after it aren't shown; user, 2026-11-07),
-// each arrow leading to the next. A page that's continuing the thread but isn't scanned yet hangs
-// off the end on a dashed arrow. Only scanned pages are in a thread (user, 2026-11-07);
-// pages passed through unscanned aren't kept. Shown on hover and on keyboard focus (CSS).
+// Hover card for the thread name: every page in the thread, so it always matches the page count
+// (user, 2026-11-07). Pages you visited, in the order they joined, joined by arrows: up to this one
+// as the path, the ones added after it muted under "Later in this thread". A page continuing the
+// thread but not scanned yet hangs off the path on a dashed arrow. Pages added from the link
+// picklist (phase 9) are listed apart, since you didn't travel through them. Shown on hover and on
+// keyboard focus (CSS), when the thread has two or more pages.
 function threadTrail(thread, tab, mode) {
-  let steps = thread.pages.map((p) => ({
-    title: p.title || p.url,
-    here: mode === "in" && Boolean(tab?.url) && normalizeUrl(p.url) === normalizeUrl(tab.url),
-    pending: false,
-  }));
-  const here = steps.findIndex((step) => step.here);
-  if (here !== -1) steps = steps.slice(0, here + 1); // URL unknown (no access yet): the whole thread
-  if (mode === "continued") steps.push({ title: tab?.title || "This page", here: true, pending: true });
+  const isHere = (p) => mode === "in" && Boolean(tab?.url) && normalizeUrl(p.url) === normalizeUrl(tab.url);
+  const visited = thread.pages.filter((p) => !p.crawled);
+  const linked = thread.pages.filter((p) => p.crawled);
+  const hereAt = visited.findIndex(isHere);
+  const path = (hereAt === -1 ? visited : visited.slice(0, hereAt + 1)).map((p) => ({ title: p.title || p.url, here: isHere(p), pending: false }));
+  if (mode === "continued") path.push({ title: tab?.title || "This page", here: true, pending: true });
+  const later = hereAt === -1 ? [] : visited.slice(hereAt + 1);
+  if (path.length + later.length + linked.length < 2) return null; // one page: nothing to show
+
+  const step = (title, cls, tag) =>
+    el("li", { class: `trail-step${cls}` }, [el("span", { class: "trail-dot" }), el("span", { class: "trail-label" }, [el("span", { class: "trail-title", text: title }), ...(tag ? [el("span", { class: "trail-tag", text: tag })] : [])])]);
+  const arrow = (cls = "") => el("li", { class: `trail-arrow${cls}`, ariaHidden: "true" }, [icon("arrowDown", 14)]);
 
   const items = [];
-  steps.forEach((step, i) => {
-    if (i > 0) items.push(el("li", { class: `trail-arrow${step.pending ? " pending" : ""}`, ariaHidden: "true" }, [icon("arrowDown", 14)]));
-    const label = [el("span", { class: "trail-title", text: step.title })];
-    if (step.here) label.push(el("span", { class: "trail-tag", text: step.pending ? "this page · not scanned yet" : "this page" }));
-    items.push(el("li", { class: `trail-step${step.here ? " here" : ""}${step.pending ? " pending" : ""}` }, [el("span", { class: "trail-dot" }), el("span", { class: "trail-label" }, label)]));
+  path.forEach((p, i) => {
+    if (i > 0) items.push(arrow(p.pending ? " pending" : ""));
+    items.push(step(p.title, `${p.here ? " here" : ""}${p.pending ? " pending" : ""}`, p.here ? (p.pending ? "this page · not scanned yet" : "this page") : null));
   });
-
-  // A single step isn't a path (the thread's first page, user 2026-11-07): no card.
-  if (steps.length < 2) return null;
-  return el("div", { class: "thread-pop", role: "tooltip" }, [
-    el("div", { class: "pop-head", text: steps.some((step) => step.here) ? "Path to this page" : "Pages in this thread" }),
-    el("ol", { class: "trail" }, items),
-  ]);
+  const groups = [el("ol", { class: "trail" }, items)];
+  if (later.length) {
+    const laterItems = [];
+    later.forEach((p, i) => {
+      if (i > 0) laterItems.push(arrow(" later"));
+      laterItems.push(step(p.title || p.url, " later", null));
+    });
+    groups.push(el("div", { class: "trail-group", text: "Later in this thread" }), el("ol", { class: "trail" }, laterItems));
+  }
+  if (linked.length) {
+    groups.push(
+      el("div", { class: "trail-group", text: "Added from links" }),
+      el("ul", { class: "trail linked" }, linked.map((p) => step(p.title || p.url, " later", p.linkedFrom?.title ? `linked from ${p.linkedFrom.title}` : null)))
+    );
+  }
+  return el("div", { class: "thread-pop", role: "tooltip" }, [el("div", { class: "pop-head", text: `Pages in this thread (${thread.pages.length})` }), ...groups]);
 }
 
 // G2 (revised 2026-11-06, user): no picker. The tab's thread shows only when there is one:
@@ -508,7 +535,7 @@ function renderThreadRow(state, dom, { onDetachThread, onDeleteThread }, { confi
     el("span", { class: "thread-icon" }, [icon(mode === "continued" ? "continues" : "pages", 14)]),
     name,
     // The count is the thread's saved pages: this page joins it (and the count) once its scan is done.
-    el("span", { class: "thread-count", text: pages }),
+    el("span", { class: `thread-count${thread.pages.length > SOFT_CAP ? " over-cap" : ""}`, text: pages, ...(thread.pages.length > SOFT_CAP ? { title: `More than ${SOFT_CAP} pages: answers draw on more pages and citations get harder to follow` } : {}) }),
     ...(trail ? [trail] : []),
   ]);
   hover.setAttribute("aria-label", `${mode === "continued" ? "Continuing" : "Thread"} ${thread.title}, ${pages}`);

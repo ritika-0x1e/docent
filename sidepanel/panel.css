@@ -891,3 +891,179 @@ details.rejected summary {
 .text-button.confirm:hover {
   color: var(--error-border);
 }
+
+/* E2: "Search the web" under an answer the pages don't cover. */
+.web-row {
+  font-size: 12px;
+}
+
+/* Trail card: pages added after this one, and pages added from links, are muted. */
+.trail-group {
+  margin: 8px 0 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.trail-step.later .trail-title {
+  color: var(--muted);
+}
+
+.trail-step.later .trail-dot {
+  background: transparent;
+  border: 1.5px solid var(--border);
+}
+
+.trail-arrow.later {
+  opacity: 0.5;
+}
+
+.trail.linked {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* G4 (phase 10): past the soft cap the page count turns amber. Nothing is blocked. */
+.thread-count.over-cap,
+.thread-hover.has-trail:hover .thread-count.over-cap {
+  color: var(--warn-border);
+}
+
+/* D5 (phase 9): the linked-pages picklist, in the reading view's place. */
+.picklist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pick-head h2 {
+  margin: 0 0 2px;
+  font-size: 15px;
+}
+
+.pick-head p {
+  margin: 0;
+}
+
+.pick-filter {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+
+.pick-filter:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.pick-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pick-list li + li {
+  border-top: 1px solid var(--border);
+}
+
+.pick-row {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 8px;
+  padding: 7px 2px;
+  cursor: pointer;
+}
+
+.pick-row input {
+  margin: 3px 0 0;
+}
+
+.pick-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.pick-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.pick-context {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pick-url {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pick-foot {
+  position: sticky;
+  bottom: -12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 -12px -12px;
+  padding: 8px 12px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.pick-note {
+  margin: 0;
+  padding: 4px 8px;
+  border-left: 3px solid var(--warn-border);
+  border-radius: 0 6px 6px 0;
+  background: var(--warn-bg);
+  font-size: 12px;
+}
+
+.pick-status {
+  margin: 0;
+}
+
+.pick-status:empty {
+  display: none;
+}
+
+.pick-failures {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+
+.pick-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* A linked page already in the thread: shown, ticked, not changeable. */
+.pick-list li.in-thread .pick-row {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.tag.added {
+  border-color: var(--accent);
+  color: var(--accent);
+}
