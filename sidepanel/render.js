@@ -130,12 +130,18 @@ const FALLBACK_TEXT = {
 
 // B3 on demand: a scan never calls the LLM. Shown on a ready tab while any section lacks a summary,
 // plus a note on which model did the last run.
-function genRowNodes(tab, { onGenerateHeadings, onStopGenerating, onOpenPicklist }) {
+function genRowNodes(tab, { onGenerateHeadings, onStopGenerating, onOpenPicklist, isPicklistOpen }) {
   if (tab?.status !== "ready" || !tab.sections?.length) return [];
   const done = tab.sections.filter((s) => s.summary !== null).length;
   const nodes = [];
   // D5 (phase 9, decision 2): the picklist opens only from here, never by itself.
-  if (tab.threadId && onOpenPicklist) nodes.push(el("button", { type: "button", text: "Add linked pages", title: "Pick pages linked from this one to add to the thread", onclick: onOpenPicklist }));
+  // A toggle: clicking it again closes the picklist (user, 2026-11-07).
+  if (tab.threadId && onOpenPicklist) {
+    const open = Boolean(isPicklistOpen?.());
+    const button = el("button", { type: "button", class: `toggle${open ? " pressed" : ""}`, text: "Add linked pages", title: open ? "Close the linked pages list" : "Pick pages linked from this one to add to the thread", onclick: onOpenPicklist });
+    button.setAttribute("aria-pressed", String(open));
+    nodes.push(button);
+  }
   if (tab.relabeling || done < tab.sections.length) {
     nodes.push(
       el("button", {
@@ -330,8 +336,9 @@ function sourceCard(source, tab, handlers, { messageKey, activeKey }) {
   if (!isHere(source, tab) && source.pageTitle) body.push(el("div", { class: "page-badge", text: source.linkedFrom ? `${source.pageTitle} (linked from ${source.linkedFrom})` : source.pageTitle, title: source.pageUrl ?? source.pageTitle }));
   body.push(el("div", { class: "source-heading", text: source.heading ?? "Untitled section" }));
   if (source.snippet) body.push(el("p", { class: "snippet", text: source.snippet }));
-  if (action) body.push(el("button", { type: "button", class: "link small", text: action.label, onclick: () => handlers.onCitation(key, source, action) }));
-  const card = el("li", { class: `source${active ? " active" : ""}` }, [el("span", { class: "source-n", text: String(source.n) }), el("div", { class: "source-body" }, body)]);
+  // The action floats in the corner on hover, like the section cards' (user, 2026-11-07).
+  const actions = action ? [el("div", { class: "card-actions" }, [el("button", { type: "button", class: "link", text: action.label, onclick: () => handlers.onCitation(key, source, action) })])] : [];
+  const card = el("li", { class: `source${active ? " active" : ""}` }, [el("span", { class: "source-n", text: String(source.n) }), el("div", { class: "source-body" }, body), ...actions]);
   card.dataset.n = String(source.n);
   return card;
 }
@@ -563,6 +570,7 @@ function renderHeader(state, dom, handlers) {
   if (view.mode === "detached") setIcon(dom.reattachThread, "link", `Continue "${view.thread.title}" on this page`);
   dom.tabTitle.textContent = tab ? tab.title || "This tab" : "No tab";
   dom.status.textContent = tab ? statusText(tab, controls.savedIn) : "";
+  dom.status.dataset.state = tab?.status ?? "none"; // theme.css: the coloured dot before the status
   dom.startScan.hidden = !controls.start;
   dom.startScan.disabled = !tab || tab.status === "scanning";
   dom.rescan.hidden = !controls.rescan;

@@ -54,7 +54,8 @@ const handlers = {
   onDeleteThread: () => onDeleteThread(),
   onAskAnyway: (question) => askQuestion(question, { force: true }),
   onCitation: (key, source, action) => toggleCitation(key, source, action),
-  onOpenPicklist: () => openPicklist(),
+  onOpenPicklist: () => (picklist?.tabId === state.activeTabId ? closePicklist() : openPicklist()),
+  isPicklistOpen: () => picklist?.tabId === state.activeTabId,
   onWebSearch: (query) =>
     chrome.runtime.sendMessage({ type: "panel-web-search", tabId: state.activeTabId, query }).then(
       (r) => r?.ok || showToast("Couldn't open the search."),

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- Toolbar sizes (16/32px): one bold shape, a bubble with a single highlight stroke, nothing else. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5B5FEF"/>
+      <stop offset="1" stop-color="#9D4EDD"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="16" height="16" rx="4" fill="url(#tile)"/>
+  <path d="M4.6 3h6.8A2.1 2.1 0 0 1 13.5 5.1v3.8A2.1 2.1 0 0 1 11.4 11H7.6L5.2 13.2V11h-.6A2.1 2.1 0 0 1 2.5 8.9V5.1A2.1 2.1 0 0 1 4.6 3z" fill="#FFFFFF"/>
+  <rect x="4.4" y="5.9" width="7.2" height="2.3" rx="0.9" fill="#FFB703"/>
+</svg>

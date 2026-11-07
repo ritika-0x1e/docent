@@ -282,7 +282,7 @@ async function retrieveSources(thread, question) {
       blocks: h.section.blocks ?? [], // for passages (phase 7); not saved on the message
       highlightable: (h.section.blocks ?? []).some((b) => b.anchored),
       jump: Boolean(h.section.jump), // Google Docs: Jump to section instead of a highlight
-      snippet: chunk.slice(chunk.lastIndexOf("\n") + 1).slice(0, SNIPPET_CHARS),
+      snippet: stripFootnotes(chunk.slice(chunk.lastIndexOf("\n") + 1)).slice(0, SNIPPET_CHARS), // no "[25][26]" in cards
       score: h.score,
     };
   });

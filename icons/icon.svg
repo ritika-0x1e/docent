@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Summarizer: a chat bubble holding one highlighted line (ask about the page; see the answer's source highlighted). -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5B5FEF"/>
+      <stop offset="1" stop-color="#9D4EDD"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="30" fill="url(#tile)"/>
+  <path d="M38 26h52c9.9 0 18 8.1 18 18v26c0 9.9-8.1 18-18 18H62L44 104V88h-6c-9.9 0-18-8.1-18-18V44c0-9.9 8.1-18 18-18z" fill="#FFFFFF"/>
+  <rect x="36" y="42" width="40" height="7" rx="3.5" fill="#D9DAFB"/>
+  <rect x="32" y="53" width="64" height="15" rx="6" fill="#FFB703"/>
+  <rect x="36" y="72" width="28" height="7" rx="3.5" fill="#D9DAFB"/>
+</svg>

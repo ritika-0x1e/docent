@@ -1,31 +1,50 @@
 :root {
   color-scheme: light dark;
-  --bg: #ffffff;
-  --fg: #1f2328;
-  --muted: #656d76;
-  --border: #d0d7de;
-  --surface: #f6f8fa;
-  --accent: #0969da;
+  /* Design tokens (UI refresh, 2026-11-07): indigo/violet like the icon, soft neutral surfaces.
+     --fill-1/--fill-2: the gradient behind white text (question bubble, send, primary buttons). */
+  --bg: #f7f7fb;
+  --fg: #17171c;
+  --muted: #6b6b7d;
+  --border: #e3e3ec;
+  --surface: #ffffff;
+  --surface-2: #f0f0f7;
+  --accent: #5b5fef;
+  --accent-2: #9d4edd;
+  --fill-1: #5b5fef;
+  --fill-2: #9d4edd;
   --accent-fg: #ffffff;
-  --warn-bg: #fff8c5;
-  --warn-border: #d4a72c;
-  --error-bg: #ffebe9;
-  --error-border: #ff8182;
+  --accent-soft: rgba(91, 95, 239, 0.1);
+  --warn-bg: #fff7e0;
+  --warn-border: #e9a400;
+  --error-bg: #fdecef;
+  --error-border: #e5484d;
+  --ok: #22a06b;
+  --shadow: 0 1px 2px rgba(23, 23, 40, 0.06), 0 4px 14px rgba(23, 23, 40, 0.06);
+  --radius: 12px;
+  --radius-sm: 8px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0d1117;
-    --fg: #e6edf3;
-    --muted: #8d96a0;
-    --border: #30363d;
-    --surface: #161b22;
-    --accent: #2f81f7;
+    --bg: #0e0e13;
+    --fg: #ececf2;
+    --muted: #9495a8;
+    --border: #262634;
+    --surface: #16161e;
+    --surface-2: #1d1d28;
+    --accent: #8b8ff8;
+    --accent-2: #b07bf0;
+    /* A touch deeper than the accent, so white text on it has more contrast (user, 2026-11-07). */
+    --fill-1: #6f73ec;
+    --fill-2: #9a5fe2;
     --accent-fg: #ffffff;
-    --warn-bg: #2e2a1a;
-    --warn-border: #9e6a03;
-    --error-bg: #2d1416;
-    --error-border: #a8434a;
+    --accent-soft: rgba(139, 143, 248, 0.14);
+    --warn-bg: #2a2212;
+    --warn-border: #c98a00;
+    --error-bg: #2c1418;
+    --error-border: #e5484d;
+    --ok: #3dd68c;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 6px 18px rgba(0, 0, 0, 0.25);
   }
 }
 
