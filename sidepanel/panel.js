@@ -18,6 +18,7 @@ const dom = {
   chatStop: document.getElementById("chat-stop"),
   chatClear: document.getElementById("chat-clear"),
   settingsToggle: document.getElementById("settings-toggle"),
+  themeToggle: document.getElementById("theme-toggle"),
   settings: document.getElementById("settings"),
   geminiKey: document.getElementById("gemini-key"),
   geminiKeyClear: document.getElementById("gemini-key-clear"),
@@ -532,6 +533,14 @@ async function init() {
   dom.reattachThread.addEventListener("click", () => changeTabThread("panel-reattach-thread"));
   setIcon(dom.rescan, "rescan");
   setIcon(dom.settingsToggle, "settings");
+  // Light/dark (theme-mode.js): the icon shows what a click switches to.
+  const showThemeButton = () => {
+    const dark = document.documentElement.dataset.theme === "dark";
+    setIcon(dom.themeToggle, dark ? "sun" : "moon", dark ? "Switch to light mode" : "Switch to dark mode");
+  };
+  showThemeButton();
+  dom.themeToggle.addEventListener("click", () => (toggleTheme(), showThemeButton()));
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => setTimeout(showThemeButton));
   dom.chatForm.addEventListener("submit", (e) => {
     e.preventDefault();
     askQuestion(dom.chatInput.value.trim());

@@ -7,6 +7,8 @@
     <link rel="stylesheet" href="panel.css" />
     <!-- The look (UI refresh, 2026-11-07); panel.css keeps the layout. -->
     <link rel="stylesheet" href="theme.css" />
+    <!-- Sets light/dark before the first paint (the sun/moon button's saved choice, or the system's). -->
+    <script src="theme-mode.js"></script>
   </head>
   <body>
     <header class="header">
@@ -15,6 +17,7 @@
       <div class="title-row">
         <div class="tab-title" id="tab-title">—</div>
         <button type="button" id="reattach-thread" class="icon" hidden></button>
+        <button type="button" id="theme-toggle" class="icon"></button>
         <button type="button" id="settings-toggle" class="icon" aria-label="Settings" aria-expanded="false" title="Settings"></button>
       </div>
       <div class="status-row">

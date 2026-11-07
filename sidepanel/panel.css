@@ -24,28 +24,33 @@
   --radius-sm: 8px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0e0e13;
-    --fg: #ececf2;
-    --muted: #9495a8;
-    --border: #262634;
-    --surface: #16161e;
-    --surface-2: #1d1d28;
-    --accent: #8b8ff8;
-    --accent-2: #b07bf0;
-    /* A touch deeper than the accent, so white text on it has more contrast (user, 2026-11-07). */
-    --fill-1: #6f73ec;
-    --fill-2: #9a5fe2;
-    --accent-fg: #ffffff;
-    --accent-soft: rgba(139, 143, 248, 0.14);
-    --warn-bg: #2a2212;
-    --warn-border: #c98a00;
-    --error-bg: #2c1418;
-    --error-border: #e5484d;
-    --ok: #3dd68c;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 6px 18px rgba(0, 0, 0, 0.25);
-  }
+/* Dark: set by sidepanel/theme-mode.js from the saved choice (the sun/moon button) or, without one,
+   from the system's mode. One block, no per-theme copies. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0e0e13;
+  --fg: #ececf2;
+  --muted: #9495a8;
+  --border: #262634;
+  --surface: #16161e;
+  --surface-2: #1d1d28;
+  --accent: #8b8ff8;
+  --accent-2: #b07bf0;
+  /* A touch deeper than the accent, so white text on it has more contrast (user, 2026-11-07). */
+  --fill-1: #6f73ec;
+  --fill-2: #9a5fe2;
+  --accent-fg: #ffffff;
+  --accent-soft: rgba(139, 143, 248, 0.14);
+  --warn-bg: #2a2212;
+  --warn-border: #c98a00;
+  --error-bg: #2c1418;
+  --error-border: #e5484d;
+  --ok: #3dd68c;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 6px 18px rgba(0, 0, 0, 0.25);
 }
 
 * {
