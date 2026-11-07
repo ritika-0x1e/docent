@@ -1,6 +1,6 @@
 ---
 name: web-search-fallback
-description: Use when implementing or modifying the web_search tool for the Summarizer (sub-feature E2) — fetching DuckDuckGo's HTML endpoint, filtering sponsored results, extracting the top 3 organic results, and rendering them as redirect-only cards. Not a general scraping skill — scope is intentionally limited to metadata extraction, never visiting or crawling the result pages themselves.
+description: Use when implementing or modifying the web_search tool for the Docent (sub-feature E2) — fetching DuckDuckGo's HTML endpoint, filtering sponsored results, extracting the top 3 organic results, and rendering them as redirect-only cards. Not a general scraping skill — scope is intentionally limited to metadata extraction, never visiting or crawling the result pages themselves.
 ---
 
 # Web search fallback

@@ -34,7 +34,7 @@ function parseHtml(html) {
   } catch (err) {
     if (!globalThis.trustedTypes) throw err;
     try {
-      const policy = trustedTypes.createPolicy("summarizer-export", { createHTML: (s) => s });
+      const policy = trustedTypes.createPolicy("docent-export", { createHTML: (s) => s });
       return new DOMParser().parseFromString(policy.createHTML(html), "text/html");
     } catch (policyErr) {
       throw new SourceError("gdocs-trusted-types", `DOMParser blocked by Trusted Types: ${policyErr.message}`);

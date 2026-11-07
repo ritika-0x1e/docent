@@ -108,7 +108,7 @@ scan → content: detectSource()
 
 **Manual:** in the combined run (phase 4 doc, items 13–16).
 
-> **As implemented (2026-11-03, both A5a and A5b built):** `content/sources.js` picks the path. If `DOMParser` throws under Trusted Types, it retries once through a `trustedTypes` policy (`summarizer-export`); if that's refused too, the scan reports `source-error` / `gdocs-trusted-types`, which is the signal to move parsing to the offscreen document. Export failures report `source-error` / `gdocs-export-failed`. Harness helper: `jumpTo(tabId, i)`.
+> **As implemented (2026-11-03, both A5a and A5b built):** `content/sources.js` picks the path. If `DOMParser` throws under Trusted Types, it retries once through a `trustedTypes` policy (`docent-export`); if that's refused too, the scan reports `source-error` / `gdocs-trusted-types`, which is the signal to move parsing to the offscreen document. Export failures report `source-error` / `gdocs-export-failed`. Harness helper: `jumpTo(tabId, i)`.
 
 ## Checkpoint: test this before building on the Google Docs path
 

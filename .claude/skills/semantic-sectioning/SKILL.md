@@ -1,6 +1,6 @@
 ---
 name: semantic-sectioning
-description: Use when implementing or modifying page sectioning for the Summarizer (sub-features B1–B3) — splitting Readability-extracted content into sections by existing headings, or by embedding-based centroid breakpoint detection when no headings exist, and generating headings/summaries after boundaries are fixed.
+description: Use when implementing or modifying page sectioning for the Docent (sub-features B1–B3) — splitting Readability-extracted content into sections by existing headings, or by embedding-based centroid breakpoint detection when no headings exist, and generating headings/summaries after boundaries are fixed.
 ---
 
 # Semantic sectioning
@@ -11,7 +11,7 @@ Implements master-spec §3.2 (sub-features B1–B3). The core rule: LLM calls ha
 
 If the extracted article contains `h1`–`h4` elements:
 1. Split content at each heading.
-2. For each block (paragraph, list, heading…) in the section, compute a text-quote anchor `{exact, prefix, suffix}` by matching the block's text against the live page, and keep the resulting live `Range` in the content script's in-memory map (`globalThis.__summarizerRanges`). Only the anchors leave the content script. `Range`s can't be messaged or persisted, and a heading-to-heading `Range` would also cover the boilerplate between paragraphs (master-spec §3.2). Unmatched blocks are marked `anchored: false`, never treated as errors.
+2. For each block (paragraph, list, heading…) in the section, compute a text-quote anchor `{exact, prefix, suffix}` by matching the block's text against the live page, and keep the resulting live `Range` in the content script's in-memory map (`globalThis.__docentRanges`). Only the anchors leave the content script. `Range`s can't be messaged or persisted, and a heading-to-heading `Range` would also cover the boilerplate between paragraphs (master-spec §3.2). Unmatched blocks are marked `anchored: false`, never treated as errors.
 3. Use the heading's own text as the section heading; no generation needed for this case.
 
 ## Unstructured case (B2)

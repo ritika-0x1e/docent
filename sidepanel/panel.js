@@ -138,14 +138,14 @@ async function onDeleteThread() {
   confirmingDelete = false;
   clearTimeout(confirmTimer);
   const result = await chrome.runtime.sendMessage({ type: "panel-delete-thread", threadId }).catch((err) => ({ ok: false, error: err.message }));
-  if (!result?.ok) console.warn("[Summarizer] couldn't delete thread", threadId, result?.error);
+  if (!result?.ok) console.warn("[Docent] couldn't delete thread", threadId, result?.error);
   dispatch({ type: "thread-deleted", threadId });
 }
 
 async function showSection(index) {
   const tabId = state.activeTabId;
   const result = await chrome.runtime.sendMessage({ type: "panel-show-section", tabId, index });
-  if (!result?.ok) console.warn("[Summarizer] couldn't show section", index, result?.error);
+  if (!result?.ok) console.warn("[Docent] couldn't show section", index, result?.error);
 }
 
 // B3 on demand. Batches stream in as "relabel-progress" messages; the reply carries the final state.
@@ -375,7 +375,7 @@ async function loadSettings() {
 function requestAllSites() {
   return chrome.permissions.request(ALL_SITES).then(
     (granted) => (hasAllSites = granted),
-    (err) => (console.warn("[Summarizer] permission request failed:", err), false)
+    (err) => (console.warn("[Docent] permission request failed:", err), false)
   );
 }
 
@@ -440,7 +440,7 @@ function holdPanelPort() {
 
 // The splitter between sections and chat. Its position is a share of the space both use, so it
 // survives resizing the panel, and it's kept per browser in localStorage (a convenience only).
-const SPLIT_KEY = "summarizer.split";
+const SPLIT_KEY = "docent.split";
 const READING_MIN = 48;
 const CHAT_MIN = 200;
 

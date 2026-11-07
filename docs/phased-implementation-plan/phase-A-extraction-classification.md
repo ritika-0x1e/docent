@@ -122,7 +122,7 @@ Two independent failure modes, both must be caught and both produce the same use
 
 **Ordering requirement:** the handshake listener must be registered *before* `executeScript` is called. `bootstrap.js` sends "ready" as soon as it runs, which can arrive before `executeScript`'s promise resolves; a listener added afterwards misses it and every normal page times out. Only the *timeout* starts after `executeScript` resolves.
 
-**Re-injection guard:** content scripts persist in the tab's isolated world until navigation. Before injecting, the background runs a one-line `executeScript({func})` probe for `globalThis.__summarizerContentLoaded` (set by `bootstrap.js`); if present, it skips injection and the handshake and goes straight to the scan message. This avoids `const` redeclaration errors and duplicate message listeners on repeat scans. The probe is itself an `executeScript` call, so restricted URLs still reject there (`injection-rejected`).
+**Re-injection guard:** content scripts persist in the tab's isolated world until navigation. Before injecting, the background runs a one-line `executeScript({func})` probe for `globalThis.__docentContentLoaded` (set by `bootstrap.js`); if present, it skips injection and the handshake and goes straight to the scan message. This avoids `const` redeclaration errors and duplicate message listeners on repeat scans. The probe is itself an `executeScript` call, so restricted URLs still reject there (`injection-rejected`).
 
 ```js
 // background/service-worker.js (original sketch; see ordering requirement and re-injection guard above)

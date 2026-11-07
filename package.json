@@ -1,8 +1,8 @@
 {
-  "name": "summarizer",
+  "name": "docent",
   "version": "0.1.0",
   "private": true,
-  "description": "Chrome extension: scoped RAG chatbot over the current tab's content.",
+  "description": "Docent: a Chrome extension that answers questions about the page you're reading, with highlighted citations.",
   "scripts": {
     "test": "node --test",
     "vendor": "node scripts/vendor.mjs"

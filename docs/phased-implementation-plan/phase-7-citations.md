@@ -10,7 +10,7 @@ Implementation plan for build-sequence step 7 in `docs/master-spec.md` §6: **F1
 - the docs for the hallucination guards.
 
 ## What exists today (phase 4/6 placeholders)
-- **Show on page** on source cards and reading-view cards calls phase 4's test highlight (`summarizer-debug`): the whole section, yellow, cleared only when the panel closes.
+- **Show on page** on source cards and reading-view cards calls phase 4's test highlight (`docent-debug`): the whole section, yellow, cleared only when the panel closes.
 - [n] chips in an answer only scroll to their card.
 - Cards from other pages are snippet-only, with a page badge.
 - Google Docs cards have Jump to section (A5a). That stays as it is.
@@ -52,7 +52,7 @@ Implementation plan for build-sequence step 7 in `docs/master-spec.md` §6: **F1
    - It needs site access, which the all-sites grant from phase 4 gives. If that grant was declined, the click asks for it.
 
 **Defaults that need no sign-off** (say if you disagree):
-- ~~Strong yellow passage, faint yellow section.~~ **Changed by the user (2026-11-07):** each citation picks a random colour from a 6-colour palette (never the same twice in a row). The passage gets a translucent tint of it; the rest of the section gets only an underline in the same colour, with no background. One named highlight per colour (`summarizer-cite-<i>`, `summarizer-cite-ctx-<i>`), styles in `background/citation-styles.js`.
+- ~~Strong yellow passage, faint yellow section.~~ **Changed by the user (2026-11-07):** each citation picks a random colour from a 6-colour palette (never the same twice in a row). The passage gets a translucent tint of it; the rest of the section gets only an underline in the same colour, with no background. One named highlight per colour (`docent-cite-<i>`, `docent-cite-ctx-<i>`), styles in `background/citation-styles.js`.
 - They're inserted the way the debug style is today (`chrome.scripting.insertCSS`), never by changing the page's DOM.
 - The phase 4 debug highlight stays only for the console helpers (`highlightSection`) and is no longer used by the panel.
 - The saved citation schema grows to `{n, corpusId, sectionId, pageUrl, …, highlightable, jump, passages: [{blockId, exact}]}`. A passage is a substring of one block's stored anchor text, so it's found inside that block's range; live ranges are never stored (spec §3.2).

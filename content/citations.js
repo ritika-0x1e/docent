@@ -14,7 +14,7 @@ var flashTimer = null;
 
 function citationHighlightNames() {
   const names = [];
-  for (let i = 0; i < CITE_COLORS; i++) names.push(`summarizer-cite-${i}`, `summarizer-cite-ctx-${i}`);
+  for (let i = 0; i < CITE_COLORS; i++) names.push(`docent-cite-${i}`, `docent-cite-ctx-${i}`);
   return names;
 }
 
@@ -27,7 +27,7 @@ function clearCitation() {
 
 function clearFlash() {
   clearTimeout(flashTimer);
-  globalThis.CSS?.highlights?.delete("summarizer-flash");
+  globalThis.CSS?.highlights?.delete("docent-flash");
 }
 
 // Where a live range starts in the text index (the index is the page's text, in order).
@@ -46,7 +46,7 @@ function indexPosition(index, range) {
  * @returns {{block, range, pos}[]}  pos: where the block starts in the index
  */
 function sectionRanges(blocks, index) {
-  const live = globalThis.__summarizerRanges;
+  const live = globalThis.__docentRanges;
   const found = [];
   let cursor = 0;
   for (const block of blocks) {
@@ -98,8 +98,8 @@ function highlightCitation(blocks, passages = []) {
   const strong = passageRanges.length ? passageRanges : found.map((f) => f.range);
   const passage = new Highlight(...strong);
   passage.priority = 1;
-  CSS.highlights.set(`summarizer-cite-${color}`, passage);
-  if (passageRanges.length) CSS.highlights.set(`summarizer-cite-ctx-${color}`, new Highlight(...found.map((f) => f.range)));
+  CSS.highlights.set(`docent-cite-${color}`, passage);
+  if (passageRanges.length) CSS.highlights.set(`docent-cite-ctx-${color}`, new Highlight(...found.map((f) => f.range)));
   scrollRangeIntoView(strong[0]);
   return { ok: true, highlighted: found.length, passages: passageRanges.length };
 }
@@ -110,7 +110,7 @@ function flashSection(blocks) {
   clearFlash();
   const found = sectionRanges(blocks, buildTextIndex(document.body));
   if (!found.length) return { ok: true, highlighted: 0 };
-  CSS.highlights.set("summarizer-flash", new Highlight(...found.map((f) => f.range)));
+  CSS.highlights.set("docent-flash", new Highlight(...found.map((f) => f.range)));
   scrollRangeIntoView(found[0].range);
   flashTimer = setTimeout(clearFlash, FLASH_MS);
   return { ok: true, highlighted: found.length };
@@ -127,6 +127,6 @@ function onCitationEsc(event) {
     /* cut off */
   }
 }
-if (globalThis.__summarizerEscHandler) document.removeEventListener("keydown", globalThis.__summarizerEscHandler, true);
-globalThis.__summarizerEscHandler = onCitationEsc;
+if (globalThis.__docentEscHandler) document.removeEventListener("keydown", globalThis.__docentEscHandler, true);
+globalThis.__docentEscHandler = onCitationEsc;
 document.addEventListener("keydown", onCitationEsc, true);

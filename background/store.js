@@ -4,7 +4,7 @@
 // added in v2, docs/phased-implementation-plan/phase-5-threads.md.
 // Loaded into the service worker with importScripts(), after vendor/idb.js (global `idb`).
 
-const DB_NAME = "summarizer";
+const DB_NAME = "docent";
 const DB_VERSION = 2;
 
 let dbPromise = null;

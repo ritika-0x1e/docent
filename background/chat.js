@@ -39,7 +39,8 @@ async function parkModel(model, window) {
   const parked = (await chrome.storage.local.get(PARKED_KEY))[PARKED_KEY] ?? {};
   parked[model] = parkedUntil(window);
   await chrome.storage.local.set({ [PARKED_KEY]: parked });
-  console.log(`[Summarizer/E4] ${model}: ${window === "day" ? "daily" : "per-minute"} quota used up, skipped until ${new Date(parked[model]).toLocaleString()}`);
+  const why = window === "gone" ? "not available to this key (404)" : `${window === "day" ? "daily" : "per-minute"} quota used up`;
+  console.log(`[Docent/E4] ${model}: ${why}, skipped until ${new Date(parked[model]).toLocaleString()}`);
 }
 
 // Timeouts (user, 2026-11-07: "it can get stuck permanently"). Moving down the ladder only on an
@@ -120,7 +121,7 @@ async function streamGemini(model, body, key, onDelta, signal) {
     // A model that doesn't take this thinking setting: once more as plain, rather than off the ladder.
     json = await response.json().catch(() => null);
     if (/thinking/i.test(json?.error?.message ?? "")) {
-      console.warn(`[Summarizer/E4] ${model} rejected thinkingLevel "low", retrying without it`);
+      console.warn(`[Docent/E4] ${model} rejected thinkingLevel "low", retrying without it`);
       response = await send(body);
       json = null;
     }
@@ -192,13 +193,18 @@ async function streamAnswer(request, onDelta, signal) {
         // Once text has shown, switching models would restart the answer mid-way: report it instead.
         if (signal?.aborted || started) throw err;
         lastError = err;
-        console.warn("[Summarizer/E4]", err.message);
+        console.warn("[Docent/E4]", err.message);
         if (err.status === 429) {
           await parkModel(model, quotaWindow(err.body));
           fallback = "gemini-quota";
           continue;
         }
-        if (err.status === 503 || err.status === 500 || err.status === 404) {
+        if (err.status === 404) {
+          await parkModel(model, "gone");
+          fallback = "gemini-overloaded";
+          continue;
+        }
+        if (err.status === 503 || err.status === 500) {
           fallback = "gemini-overloaded";
           continue;
         }
@@ -258,7 +264,7 @@ async function retrieveHits(refs, question) {
   const gateScore = hits[0]?.score ?? null;
   const corrected = correctQuery(question, await threadVocabulary(refs));
   if (!corrected) return Object.assign(hits.slice(0, MAX_SOURCES), { gateScore });
-  console.log(`[Summarizer/E1] also searching with ${corrected.fixes.map((f) => `"${f.from}" → "${f.to}"`).join(", ")}`);
+  console.log(`[Docent/E1] also searching with ${corrected.fixes.map((f) => `"${f.from}" → "${f.to}"`).join(", ")}`);
   const best = new Map(hits.map((h) => [`${h.corpusId}|${h.sectionId}`, h]));
   for (const h of (await retrieve(refs, corrected.text, "blended")).hits) {
     const key = `${h.corpusId}|${h.sectionId}`;
@@ -312,20 +318,39 @@ async function retrieveSources(thread, question) {
   return Object.assign(sources, { gateScore });
 }
 
+// Window vectors by window text, kept while the service worker lives: follow-up questions about
+// the same sections reuse them instead of embedding every window again. Bounded; oldest dropped first.
+const windowVectorCache = new Map();
+const WINDOW_CACHE_MAX = 4000;
+
+/** Vectors for `extra` (never cached) and `windows` (cached), in one embedding call. */
+async function embedWithWindows(extra, windows) {
+  const todo = [...new Set(windows.filter((t) => !windowVectorCache.has(t)))];
+  const { vectors } = await embedTexts([...extra, ...todo]);
+  todo.forEach((t, i) => windowVectorCache.set(t, vectors[extra.length + i]));
+  for (const key of windowVectorCache.keys()) {
+    if (windowVectorCache.size <= WINDOW_CACHE_MAX) break;
+    windowVectorCache.delete(key);
+  }
+  return { extraVecs: vectors.slice(0, extra.length), windowVecs: windows.map((t) => windowVectorCache.get(t)) };
+}
+
 // Hallucination check (lib/grounding.js): each answer sentence against windows of the sources it was
 // given, embedded locally, plus the numbers it states.
 async function checkGrounding(answerText, sources, question) {
   const sentences = answerSentences(answerText);
-  const toCheck = sentences.filter((s) => s.check);
-  if (!toCheck.length) return judgeAnswer(sentences, [], new Set());
   const texts = sources.map((s) => stripFootnotes(s.text));
-  const windows = sourceWindows(texts);
-  const { vectors } = await embedTexts([...toCheck.map((s) => s.plain), ...windows]);
-  const claimVecs = vectors.slice(0, toCheck.length);
-  const windowVecs = vectors.slice(toCheck.length);
-  const best = new Map(toCheck.map((s, i) => [s, Math.max(...windowVecs.map((w) => dot(claimVecs[i], w)))]));
   const all = `${texts.join("\n")}\n${question}`;
-  return judgeAnswer(sentences, sentences.map((s) => best.get(s) ?? null), sourceNumbers(all), { words: sourceWordSet(all) });
+  const known = sourceNumbers(all);
+  const words = sourceWordSet(all);
+  // Only sentences the word and number checks don't already settle are embedded (lib/grounding.js).
+  const toEmbed = sentences.filter((s) => needsSimilarity(s, known, words));
+  const best = new Map();
+  if (toEmbed.length) {
+    const { extraVecs: claimVecs, windowVecs } = await embedWithWindows(toEmbed.map((s) => s.plain), sourceWindows(texts));
+    toEmbed.forEach((s, i) => best.set(s, Math.max(...windowVecs.map((w) => dot(claimVecs[i], w)))));
+  }
+  return judgeAnswer(sentences, sentences.map((s) => best.get(s) ?? null), known, { words });
 }
 
 // F2 (phase 7): the passages inside each cited section that support the claims citing it
@@ -425,7 +450,7 @@ async function answerQuestion({ tabId, threadId, question, force = false, quote 
     const topScore = mode === "retrieval" ? (sources.gateScore ?? sources[0]?.score ?? null) : null;
     onSources({ mode, count: relevant ? sources.length : 0 });
     console.log(
-      `[Summarizer/E1] ${mode === "selection" ? `answering from the selection (${selection.split(" ").length} words), no retrieval` : `${sources.length} sources retrieved, best ${topScore?.toFixed(3)}${relevant ? "" : `: below ${RELEVANCE_MIN}, not covered, the model isn't asked`}${force ? " (ask anyway)" : ""}`}`
+      `[Docent/E1] ${mode === "selection" ? `answering from the selection (${selection.split(" ").length} words), no retrieval` : `${sources.length} sources retrieved, best ${topScore?.toFixed(3)}${relevant ? "" : `: below ${RELEVANCE_MIN}, not covered, the model isn't asked`}${force ? " (ask anyway)" : ""}`}`
     );
 
     // The selection rides on the question, shown as a short link in its bubble (click: highlight it).
@@ -453,11 +478,11 @@ async function answerQuestion({ tabId, threadId, question, force = false, quote 
         similarity = dot(vectors[0], vectors[1]);
         if (leftover.length) intent = Math.max(...vectors.slice(3).map((v) => dot(vectors[2], v)));
       } catch (err) {
-        console.warn("[Summarizer/E3] couldn't check the question against the selection:", err.message);
+        console.warn("[Docent/E3] couldn't check the question against the selection:", err.message);
       }
       const check = explainQuestionCheck({ question, selection, context: selectionContext, similarity, intent });
       console.log(
-        `[Summarizer/E3] explain question: ${check.why}${similarity == null ? "" : ` (selection ${similarity.toFixed(3)}${intent == null ? "" : `, asking ${intent.toFixed(3)}`})`}${check.novel.length ? `, own words: ${check.novel.join(" ")}` : ""}`
+        `[Docent/E3] explain question: ${check.why}${similarity == null ? "" : ` (selection ${similarity.toFixed(3)}${intent == null ? "" : `, asking ${intent.toFixed(3)}`})`}${check.novel.length ? `, own words: ${check.novel.join(" ")}` : ""}`
       );
       explainGated = !check.ok;
     }
@@ -474,7 +499,7 @@ async function answerQuestion({ tabId, threadId, question, force = false, quote 
         const cutOff = err.name === "TimeoutError" && err.stage === "stall";
         if (!partial || (!signal?.aborted && !cutOff)) throw err;
         stopped = true;
-        if (cutOff) console.warn("[Summarizer/E4]", err.message);
+        if (cutOff) console.warn("[Docent/E4]", err.message);
         answer = { text: partial, provider: null, model: null, fallback: null, cutOff };
       }
     }
@@ -496,7 +521,7 @@ async function answerQuestion({ tabId, threadId, question, force = false, quote 
         grounding = await checkGrounding(content, sources, question);
         msCheck = Date.now() - tCheck;
       } catch (err) {
-        console.warn("[Summarizer/E4] grounding check failed, answer kept unchecked:", err.message);
+        console.warn("[Docent/E4] grounding check failed, answer kept unchecked:", err.message);
       }
       if (grounding?.verdict === "ungrounded") {
         // Nothing in it was found in the sources: shown as not covered, the model's text folded away.
@@ -518,9 +543,9 @@ async function answerQuestion({ tabId, threadId, question, force = false, quote 
         const similarity = dot(vectors[0], vectors[1]);
         const perSentence = vectors.slice(2).map((v) => dot(v, vectors[1]));
         drifted = !explainAnswerOnTopic(similarity, perSentence);
-        console.log(`[Summarizer/E3] explain answer vs selection: ${similarity.toFixed(3)}; sentences ${perSentence.map((x) => x.toFixed(2)).join(" ")}${drifted ? " (drifted: hidden)" : ""}`);
+        console.log(`[Docent/E3] explain answer vs selection: ${similarity.toFixed(3)}; sentences ${perSentence.map((x) => x.toFixed(2)).join(" ")}${drifted ? " (drifted: hidden)" : ""}`);
       } catch (err) {
-        console.warn("[Summarizer/E3] couldn't check the answer against the selection:", err.message);
+        console.warn("[Docent/E3] couldn't check the answer against the selection:", err.message);
       }
       if (drifted) {
         rejected = content;
@@ -544,7 +569,7 @@ async function answerQuestion({ tabId, threadId, question, force = false, quote 
       try {
         passages = await findPassages(content, sources, cited, uncited);
       } catch (err) {
-        console.warn("[Summarizer/F2] passage matching failed, citations show whole sections:", err.message);
+        console.warn("[Docent/F2] passage matching failed, citations show whole sections:", err.message);
       }
     }
     const assistantMessage = {
@@ -589,7 +614,7 @@ async function answerQuestion({ tabId, threadId, question, force = false, quote 
     });
     if (!saved) throw new Error("This thread was deleted while answering.");
     console.log(
-      `[Summarizer/E4] answered via ${answer.provider ?? "none"}${answer.model ? ` (${answer.model})` : ""}${answer.fallback ? `, fallback: ${answer.fallback}` : ""}; cited ${cited.join(", ") || "nothing"}${grounding ? `; grounding: ${grounding.verdict}${grounding.verdict !== "grounded" ? ` (${assistantMessage.grounding.unsupported.length} sentence(s) not found in the sources)` : ""}` : ""}${stopped ? "; stopped" : ""}` +
+      `[Docent/E4] answered via ${answer.provider ?? "none"}${answer.model ? ` (${answer.model})` : ""}${answer.fallback ? `, fallback: ${answer.fallback}` : ""}; cited ${cited.join(", ") || "nothing"}${grounding ? `; grounding: ${grounding.verdict}${grounding.verdict !== "grounded" ? ` (${assistantMessage.grounding.unsupported.length} sentence(s) not found in the sources)` : ""}` : ""}${stopped ? "; stopped" : ""}` +
         (answer.provider ? `; sources ${(msSources / 1000).toFixed(1)}s, first text after ${(msFirstText / 1000).toFixed(1)}s, answer ${(msAnswer / 1000).toFixed(1)}s${msCheck != null ? `, check ${(msCheck / 1000).toFixed(1)}s` : ""}` : "")
     );
     return { ok: true, thread: saved, message: assistantMessage };

@@ -54,7 +54,7 @@ Chunk text is prefixed with the section's **HTML** heading path when one exists 
 
 ## C2 — IndexedDB schema
 
-Database `summarizer`, version 1. It's owned by the background service worker; the side panel asks the background for data and never opens the database itself. This matches CLAUDE.md ("background: … storage access"). Content scripts can't use it anyway: they run on the page's origin, not the extension's.
+Database `docent`, version 1. It's owned by the background service worker; the side panel asks the background for data and never opens the database itself. This matches CLAUDE.md ("background: … storage access"). Content scripts can't use it anyway: they run on the page's origin, not the extension's.
 
 | Store | Key | Indexes | Record |
 |---|---|---|---|
@@ -102,7 +102,7 @@ Background wrapper: `retrieve(corpusIds, queryText, k)` embeds the query, loads 
 ## Checkpoints: test these before starting phase 4
 
 - [x] **CP-C1: retrieval sanity on one real page.** *(Passed 2026-11-03 on a Wikipedia TFA archive page: early, late and deep-in-long-section questions all found the right section. Whole-section highlight is expected from search alone. Sentence-level highlighting comes from the chatbot's quotes in F.)* Scan the headed docs page, then ask 3 questions with `query(...)`: one whose answer is in an early section, one in a late section, and one whose answer sits deep inside a long section. Pass: the right section is in the top 3 for all three, and the third question specifically shows that chunking works. *Why now:* if retrieval quality is wrong, the fix (chunk size, heading prefix) belongs in C. In the combined run it would look like a side-panel problem.
-- [x] **CP-C2: data survives a service-worker restart.** *(Passed 2026-11-03: the worker went idle and Chrome stopped it ("service worker (Inactive)"); after it woke, `listCorpora()` and `query` still worked. Note: reloading the extension clears `chrome.storage.session`, so the tab-to-corpus link is lost then. The IndexedDB data survives.)* After a scan, open `chrome://serviceworker-internals`, click **Stop** on the Summarizer worker, then run `listCorpora()` again (opening the console wakes the worker). Pass: the corpus is still there and `query` still works. *Why now:* MV3 kills idle service workers after ~30s, so anything that only lived in memory would vanish between scans and chat in phase 4+.
+- [x] **CP-C2: data survives a service-worker restart.** *(Passed 2026-11-03: the worker went idle and Chrome stopped it ("service worker (Inactive)"); after it woke, `listCorpora()` and `query` still worked. Note: reloading the extension clears `chrome.storage.session`, so the tab-to-corpus link is lost then. The IndexedDB data survives.)* After a scan, open `chrome://serviceworker-internals`, click **Stop** on the Docent worker, then run `listCorpora()` again (opening the console wakes the worker). Pass: the corpus is still there and `query` still works. *Why now:* MV3 kills idle service workers after ~30s, so anything that only lived in memory would vanish between scans and chat in phase 4+.
 
 ## Exit criteria for Phase C (ticked during the combined run, except unit tests and checkpoints)
 

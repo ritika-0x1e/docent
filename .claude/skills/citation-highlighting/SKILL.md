@@ -1,6 +1,6 @@
 ---
 name: citation-highlighting
-description: Use when implementing or modifying how chat answers cite and highlight source sections for the Summarizer (sub-features F1–F3) — mapping a retrieved section back to a live DOM highlight when its source page is open, or a snippet-plus-link when it isn't.
+description: Use when implementing or modifying how chat answers cite and highlight source sections for the Docent (sub-features F1–F3) — mapping a retrieved section back to a live DOM highlight when its source page is open, or a snippet-plus-link when it isn't.
 ---
 
 # Citation highlighting
@@ -19,8 +19,8 @@ For any cited section whose source page is the currently open/active tab:
 ## As built in phase 7 (2026-11-07)
 
 - **Passage, not section.** Each citation stores `passages: [{blockId, exact}]`: the sentence(s) of the section that best match the answer sentences citing it (`lib/passages.js`, local embeddings, floor `PASSAGE_MIN`). The passage gets a translucent tint; the rest of the section an underline in the same colour. No passage → the whole section is tinted.
-- **Colours.** A random palette colour per citation, one named highlight per colour (`summarizer-cite-<i>`, `summarizer-cite-ctx-<i>`), styles in `background/citation-styles.js`; `CITE_COLORS` in `content/citations.js` must match the palette length.
-- **Triggers.** The [n] chip or card toggles the highlight (opening/focusing the source page if needed); Esc, the next question and closing the panel clear it. Reading-view cards only flash (`summarizer-flash`, 2 s).
+- **Colours.** A random palette colour per citation, one named highlight per colour (`docent-cite-<i>`, `docent-cite-ctx-<i>`), styles in `background/citation-styles.js`; `CITE_COLORS` in `content/citations.js` must match the palette length.
+- **Triggers.** The [n] chip or card toggles the highlight (opening/focusing the source page if needed); Esc, the next question and closing the panel clear it. Reading-view cards only flash (`docent-flash`, 2 s).
 - **Selection answers.** [1] is the selected text (`selection: true, quote`), highlighted as one quote.
 
 ## Citation-to-response mapping (F2)

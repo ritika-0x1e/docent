@@ -66,8 +66,8 @@ function bannerFor(tab, { onForceScan, onAllowAccess, onOpenSettings }) {
     return {
       kind: "warn",
       nodes: [
-        el("p", { text: "Summarizer doesn't have access to this site yet." }),
-        el("p", { text: "Allow it once for all sites, or click the Summarizer icon in the toolbar to allow just this tab." }),
+        el("p", { text: "Docent doesn't have access to this site yet." }),
+        el("p", { text: "Allow it once for all sites, or click the Docent icon in the toolbar to allow just this tab." }),
         el("button", { type: "button", text: "Allow access", onclick: onAllowAccess }),
       ],
     };

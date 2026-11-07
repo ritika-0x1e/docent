@@ -2,7 +2,7 @@
 // port (H2, background/pipeline.js), and keeps the Phase A–C console helpers for debugging until
 // their real replacements exist (phase-4 plan, "Harness changes").
 //
-// Console: chrome://extensions -> Summarizer -> "service worker" devtools console.
+// Console: chrome://extensions -> Docent -> "service worker" devtools console.
 
 importScripts(
   "offscreen-client.js",
@@ -34,7 +34,7 @@ importScripts(
   "chat.js"
 );
 
-const DEBUG_HIGHLIGHT_CSS = "::highlight(summarizer-debug) { background-color: #ffe066; color: #000; }";
+const DEBUG_HIGHLIGHT_CSS = "::highlight(docent-debug) { background-color: #ffe066; color: #000; }";
 
 async function getLastScan(tabId) {
   const key = `scan:${tabId}`;
@@ -48,7 +48,7 @@ function logSections({ response, sections, b2Stats, cStats }) {
   const rate = stats.blocks ? ((100 * anchored) / stats.blocks).toFixed(1) : "0";
 
   console.log(
-    `[Summarizer/B] source ${response.source}; ${sections.length} sections (${method}); ` +
+    `[Docent/B] source ${response.source}; ${sections.length} sections (${method}); ` +
       (stats.anchoringSkipped
         ? "anchoring skipped (Google Docs: canvas page, citations use snippet + jump); "
         : `anchored ${anchored}/${stats.blocks} blocks = ${rate}% (exact ${stats.anchoredExact}, edges ${stats.anchoredEdges}, unanchored ${stats.unanchored}); `) +
@@ -57,10 +57,10 @@ function logSections({ response, sections, b2Stats, cStats }) {
   );
   if (b2Stats) {
     console.log(
-      `[Summarizer/B2] ${b2Stats.units} units embedded; model load ${b2Stats.msModelLoad}ms, embed ${b2Stats.msEmbed}ms`
+      `[Docent/B2] ${b2Stats.units} units embedded; model load ${b2Stats.msModelLoad}ms, embed ${b2Stats.msEmbed}ms`
     );
   }
-  console.log("[Summarizer/B3] on demand: run generateHeadings(tabId), or press Generate headings in the panel");
+  console.log("[Docent/B3] on demand: run generateHeadings(tabId), or press Generate headings in the panel");
 
   console.table(
     sections.map((s, i) => ({
@@ -76,41 +76,41 @@ function logSections({ response, sections, b2Stats, cStats }) {
   );
   console.log(
     stats.anchoringSkipped
-      ? "[Summarizer/B] jump to a section with: jumpTo(tabId, i)"
-      : "[Summarizer/B] check a section on the page with: highlightSection(tabId, i)"
+      ? "[Docent/B] jump to a section with: jumpTo(tabId, i)"
+      : "[Docent/B] check a section on the page with: highlightSection(tabId, i)"
   );
 
   if (cStats.storeError) {
-    console.error(`[Summarizer/C] corpus NOT stored: ${cStats.storeError}`);
+    console.error(`[Docent/C] corpus NOT stored: ${cStats.storeError}`);
   } else {
     console.log(
-      `[Summarizer/C] stored corpus ${cStats.corpusId}: ${cStats.chunks} chunks embedded in ${cStats.msEmbed}ms. ` +
+      `[Docent/C] stored corpus ${cStats.corpusId}: ${cStats.chunks} chunks embedded in ${cStats.msEmbed}ms. ` +
         `Ask it something with: query(tabId, "your question")`
     );
   }
 }
 
 async function runHarness(tabId, opts = {}) {
-  console.log(`[Summarizer/A] scanning tab ${tabId}${opts.force ? " (forced)" : ""}...`);
+  console.log(`[Docent/A] scanning tab ${tabId}${opts.force ? " (forced)" : ""}...`);
   const result = await runScan(tabId, opts);
 
   if (result.blocked) {
-    console.warn(`[Summarizer/A] site restricts extension access (${result.reason})`, result.detail || "");
+    console.warn(`[Docent/A] site restricts extension access (${result.reason})`, result.detail || "");
     return result;
   }
 
   const { response } = result;
   if (response.status === "ok") {
-    console.log("[Summarizer/A] extracted:", response.article?.title, `(${response.classifyResult.wordCount} words)`);
-    console.log("[Summarizer/A] classification:", response.classifyResult);
+    console.log("[Docent/A] extracted:", response.article?.title, `(${response.classifyResult.wordCount} words)`);
+    console.log("[Docent/A] classification:", response.classifyResult);
     logSections(result);
   } else if (response.status === "needs-force-scan") {
-    console.log("[Summarizer/A] sparse/media-dominated page — would show banner+force-scan in side panel (A3).", response.classifyResult);
-    console.log(`[Summarizer/A] to simulate the override, run: forceScan(${tabId})`);
+    console.log("[Docent/A] sparse/media-dominated page — would show banner+force-scan in side panel (A3).", response.classifyResult);
+    console.log(`[Docent/A] to simulate the override, run: forceScan(${tabId})`);
   } else if (response.status === "source-error") {
-    console.warn(`[Summarizer/A5] couldn't read this ${response.source} source (${response.reason}): ${response.error}`);
+    console.warn(`[Docent/A5] couldn't read this ${response.source} source (${response.reason}): ${response.error}`);
   } else {
-    console.error("[Summarizer/A] content script reported an error:", response.error);
+    console.error("[Docent/A] content script reported an error:", response.error);
   }
   return result;
 }
@@ -121,15 +121,15 @@ globalThis.forceScan = (tabId, opts) => runHarness(tabId, { ...opts, force: true
 
 globalThis.highlightSection = async (tabId, index) => {
   const section = (await getLastScan(tabId))?.sections[index];
-  if (!section) return console.warn(`[Summarizer/B] no section ${index} for tab ${tabId} — scan it first`);
+  if (!section) return console.warn(`[Docent/B] no section ${index} for tab ${tabId} — scan it first`);
   if (!section.blocks.some((b) => b.anchored)) {
-    return console.warn(`[Summarizer/B] section ${index} has no anchored text${section.jump ? " — try jumpTo(tabId, i)" : ""}`);
+    return console.warn(`[Docent/B] section ${index} has no anchored text${section.jump ? " — try jumpTo(tabId, i)" : ""}`);
   }
   // insertCSS styles the highlight without touching the page DOM and isn't subject to page CSP.
   await chrome.scripting.insertCSS({ target: { tabId }, css: DEBUG_HIGHLIGHT_CSS });
   const result = await chrome.tabs.sendMessage(tabId, { type: "highlight-blocks", blockIds: section.blocks.map((b) => b.id) });
   if (result?.ok) await rememberHighlight(tabId);
-  console.log(`[Summarizer/B] highlightSection(${index}):`, result);
+  console.log(`[Docent/B] highlightSection(${index}):`, result);
   return result;
 };
 
@@ -161,11 +161,11 @@ globalThis.clearHighlight = (tabId) => chrome.tabs.sendMessage(tabId, { type: "c
 // by clicking its entry in the doc's outline sidebar (content/sources.js).
 globalThis.jumpTo = async (tabId, index) => {
   const section = (await getLastScan(tabId))?.sections[index];
-  if (!section) return console.warn(`[Summarizer/A5] no section ${index} for tab ${tabId} — scan it first`);
-  if (!section.jump) return console.warn(`[Summarizer/A5] section ${index} has no heading to jump to — snippet only`);
+  if (!section) return console.warn(`[Docent/A5] no section ${index} for tab ${tabId} — scan it first`);
+  if (!section.jump) return console.warn(`[Docent/A5] section ${index} has no heading to jump to — snippet only`);
   const result = await chrome.tabs.sendMessage(tabId, { type: "jump-to-outline-heading", jump: section.jump });
-  if (result.ok) console.log(`[Summarizer/A5] jumped to "${section.heading}"`, result);
-  else console.warn(`[Summarizer/A5] couldn't jump to "${section.heading}": ${result.error}`);
+  if (result.ok) console.log(`[Docent/A5] jumped to "${section.heading}"`, result);
+  else console.warn(`[Docent/A5] couldn't jump to "${section.heading}": ${result.error}`);
   return result;
 };
 
@@ -173,12 +173,12 @@ globalThis.jumpTo = async (tabId, index) => {
 // sections, so "find some content → highlight or jump to its section" can be tried end to end.
 globalThis.findSection = async (tabId, query) => {
   const scan = await getLastScan(tabId);
-  if (!scan) return console.warn(`[Summarizer/B] no scan for tab ${tabId} — scan it first`);
+  if (!scan) return console.warn(`[Docent/B] no scan for tab ${tabId} — scan it first`);
   const needle = query.toLowerCase();
   const hits = scan.sections
     .map((s, i) => ({ s, i, at: `${s.heading}\n${s.text}`.toLowerCase().indexOf(needle) }))
     .filter((h) => h.at !== -1);
-  if (hits.length === 0) return console.log(`[Summarizer/B] no section contains "${query}"`);
+  if (hits.length === 0) return console.log(`[Docent/B] no section contains "${query}"`);
 
   console.table(
     hits.map(({ s, i, at }) => {
@@ -197,12 +197,12 @@ globalThis.findSection = async (tabId, query) => {
 // the corpus id is in session storage and everything else is in IndexedDB.
 globalThis.query = async (tabId, question, k = 5) => {
   const scan = await getLastScan(tabId);
-  if (!scan?.corpusId) return console.warn(`[Summarizer/C] no stored corpus for tab ${tabId} — scan it first`);
+  if (!scan?.corpusId) return console.warn(`[Docent/C] no stored corpus for tab ${tabId} — scan it first`);
 
   const t0 = Date.now();
   const { hits, staleCorpora } = await retrieve([scan.corpusId], question, k);
-  if (staleCorpora.length) console.warn("[Summarizer/C] corpus was embedded with a different model — re-scan it");
-  console.log(`[Summarizer/C] top ${hits.length} for "${question}" (${Date.now() - t0}ms)`);
+  if (staleCorpora.length) console.warn("[Docent/C] corpus was embedded with a different model — re-scan it");
+  console.log(`[Docent/C] top ${hits.length} for "${question}" (${Date.now() - t0}ms)`);
   console.table(
     hits.map((h, rank) => ({
       rank: rank + 1,
@@ -238,7 +238,7 @@ globalThis.listCorpora = async () => {
 
 globalThis.clearCorpora = async () => {
   await clearStoredCorpora();
-  console.log("[Summarizer/C] all stored corpora and threads deleted");
+  console.log("[Docent/C] all stored corpora and threads deleted");
 };
 
 globalThis.listThreads = async () => {
@@ -251,19 +251,19 @@ globalThis.listThreads = async () => {
 
 globalThis.clearThreads = async () => {
   for (const t of await listStoredThreads()) await deleteThread(t.id);
-  console.log("[Summarizer/G1] all threads and their corpora deleted");
+  console.log("[Docent/G1] all threads and their corpora deleted");
 };
 
 globalThis.setGeminiKey = async (key) => {
   await chrome.storage.local.set({ geminiApiKey: key });
-  console.log("[Summarizer/B3] Gemini key saved"); // never log the key itself
+  console.log("[Docent/B3] Gemini key saved"); // never log the key itself
 };
 
 // CP-B2: confirms the offscreen document + embedding worker + model load end to end.
 globalThis.embed = async (texts) => {
   const { vectors, stats } = await embedTexts(texts);
   console.log(
-    `[Summarizer/B] embedded ${stats.count} texts → dims [${vectors.map((v) => v.length).join(", ")}]; ` +
+    `[Docent/B] embedded ${stats.count} texts → dims [${vectors.map((v) => v.length).join(", ")}]; ` +
       `model load ${stats.msModelLoad}ms${stats.msModelLoad ? " (cold start)" : " (already loaded)"}, embed ${stats.msEmbed}ms`
   );
   return vectors;
@@ -333,7 +333,7 @@ async function showCitation(tabId, citation, open) {
   if (!result?.ok) return { ...result, tabId: target };
   if (!result.highlighted) return { ok: false, tabId: target, error: "This text isn't on the page any more." };
   await rememberHighlight(target);
-  console.log(`[Summarizer/F1] citation ${citation.n}: ${result.passages ? `${result.passages} passage(s)` : "whole section"} highlighted on tab ${target}${open ? " (opened from another page)" : ""}`);
+  console.log(`[Docent/F1] citation ${citation.n}: ${result.passages ? `${result.passages} passage(s)` : "whole section"} highlighted on tab ${target}${open ? " (opened from another page)" : ""}`);
   return { ...result, tabId: target };
 }
 
@@ -388,7 +388,7 @@ const panelHandlers = {
     // load and can miss a tab created this way (phases 8–10 run).
     const { threadId } = await tabThread(tabId);
     if (threadId) await setTabThread(tab.id, { threadId });
-    console.log(`[Summarizer/E2] web search opened in tab ${tab.id}: "${query}" (${SEARCH_ENGINES[webSearchEngine]?.name ?? "DuckDuckGo"})`);
+    console.log(`[Docent/E2] web search opened in tab ${tab.id}: "${query}" (${SEARCH_ENGINES[webSearchEngine]?.name ?? "DuckDuckGo"})`);
     return { ok: true, tabId: tab.id };
   },
   // D5 (phase 9): this tab's linked pages for the picklist: the top 20 (D4) and every link (for the
@@ -461,11 +461,11 @@ async function generateHeadingsFor(tabId, signal) {
   await chrome.storage.session.set({ [`scan:${tabId}`]: { ...scan, sections } });
 
   const { stats } = b3;
-  for (const err of stats.errors) console.warn("[Summarizer/B3]", err);
+  for (const err of stats.errors) console.warn("[Docent/B3]", err);
   console.log(
     stats.skipped
-      ? `[Summarizer/B3] skipped (${stats.skipped}): set a Gemini key or an Ollama model in the panel's ⚙`
-      : `[Summarizer/B3] ${stats.labelled}/${pending.length} sections labelled via ${stats.provider}${stats.fallback ? ` (fallback: ${stats.fallback})` : ""} in ${stats.batches} batches, ${stats.ms}ms${stats.stopped ? " (stopped)" : ""}`
+      ? `[Docent/B3] skipped (${stats.skipped}): set a Gemini key or an Ollama model in the panel's ⚙`
+      : `[Docent/B3] ${stats.labelled}/${pending.length} sections labelled via ${stats.provider}${stats.fallback ? ` (fallback: ${stats.fallback})` : ""} in ${stats.batches} batches, ${stats.ms}ms${stats.stopped ? " (stopped)" : ""}`
   );
   return {
     ok: true,
@@ -493,7 +493,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // click's user gesture, so nothing may be awaited before it.
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
 chrome.action.onClicked.addListener((tab) => {
-  chrome.sidePanel.open({ windowId: tab.windowId }).catch((err) => console.error("[Summarizer] sidePanel.open failed:", err));
+  chrome.sidePanel.open({ windowId: tab.windowId }).catch((err) => console.error("[Docent] sidePanel.open failed:", err));
   // An already-open panel can now read this tab's title; no receiver (panel just opening) is fine.
   chrome.runtime.sendMessage({ type: "action-clicked", tabId: tab.id }).catch(() => {});
 });
@@ -519,7 +519,7 @@ chrome.runtime.onConnect.addListener((port) => {
     try {
       await scanIntoThread(tabId, { threadId, force, rescan }, (progress) => post({ tabId, scanId, ...progress }));
     } catch (err) {
-      console.error("[Summarizer] scan failed:", err);
+      console.error("[Docent] scan failed:", err);
       post({ tabId, scanId, stage: "error", message: String(err?.message ?? err) });
     }
   });
@@ -587,7 +587,7 @@ chrome.runtime.onConnect.addListener((port) => {
       broadcast(live, { chatId, type: "done", thread: result.thread, message: result.message });
     } catch (err) {
       const stopped = live.controller.signal.aborted;
-      if (!stopped) console.error("[Summarizer] chat failed:", err);
+      if (!stopped) console.error("[Docent] chat failed:", err);
       broadcast(live, { chatId, type: "error", error: stopped ? "Stopped before any answer arrived." : String(err?.message ?? err) });
     } finally {
       liveChats.delete(chatId);

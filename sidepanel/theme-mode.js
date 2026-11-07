@@ -4,7 +4,7 @@
 // paints, so it never flashes the wrong theme. The choice is a per-browser convenience, so it lives
 // in localStorage (read synchronously here); if storage is blocked, the system's mode is used.
 
-const THEME_KEY = "summarizer.theme"; // "light" | "dark" | absent (follow the system)
+const THEME_KEY = "docent.theme"; // "light" | "dark" | absent (follow the system)
 const systemDark = window.matchMedia("(prefers-color-scheme: dark)");
 
 function savedTheme() {

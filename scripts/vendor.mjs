@@ -28,7 +28,7 @@ for (const { pkg, from, to } of FILES) {
 
   // Downloaded packages are untrusted: unpack in a fresh temp dir, copy out only the one file.
   // `npm pack` only downloads the tarball — it doesn't run install scripts.
-  const work = mkdtempSync(join(tmpdir(), "summarizer-vendor-"));
+  const work = mkdtempSync(join(tmpdir(), "docent-vendor-"));
   try {
     const tarball = execFileSync("npm", ["pack", pkg, "--silent"], { cwd: work, encoding: "utf8" }).trim();
     execFileSync("tar", ["xzf", tarball, from], { cwd: work });

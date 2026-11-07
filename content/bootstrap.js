@@ -142,8 +142,8 @@ function onQuoteKey(event) {
 // Every load of this script installs its own listener and removes the previous load's: after an
 // extension reload the old one is cut off, and a "register once" flag would leave only that one.
 function listenForQuoteKey() {
-  const previous = globalThis.__summarizerQuoteHandler;
-  globalThis.__summarizerQuoteHandler = onQuoteKey;
+  const previous = globalThis.__docentQuoteHandler;
+  globalThis.__docentQuoteHandler = onQuoteKey;
   const docs = [document];
   for (const frame of document.querySelectorAll("iframe")) {
     try {
@@ -159,8 +159,8 @@ function listenForQuoteKey() {
 }
 
 listenForQuoteKey();
-document.removeEventListener("mousedown", globalThis.__summarizerQuoteRescan ?? listenForQuoteKey, true);
-globalThis.__summarizerQuoteRescan = listenForQuoteKey;
+document.removeEventListener("mousedown", globalThis.__docentQuoteRescan ?? listenForQuoteKey, true);
+globalThis.__docentQuoteRescan = listenForQuoteKey;
 document.addEventListener("mousedown", listenForQuoteKey, true);
 
 (function bootstrap() {
@@ -196,7 +196,7 @@ document.addEventListener("mousedown", listenForQuoteKey, true);
     });
 
     // Read by background's isAlreadyInjected() so repeat scans on this page skip re-injection.
-    globalThis.__summarizerContentLoaded = true;
+    globalThis.__docentContentLoaded = true;
   } catch (err) {
     // Best-effort: if something (e.g. a page-level restriction) breaks even this,
     // background's handshake timeout is the real backstop — this send may never land.

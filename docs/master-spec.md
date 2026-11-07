@@ -1,4 +1,4 @@
-# Summarizer — Master Spec
+# Docent — Master Spec
 
 Source of truth for ideation, architecture, decisions, and implementation order. Each sub-feature below is meant to be built and tested independently before wiring into the next.
 

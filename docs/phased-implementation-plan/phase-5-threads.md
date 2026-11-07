@@ -59,7 +59,7 @@ panel opens → load threads (sorted by updatedAt) → preselect (decision 1) �
 /background/store.js         DB v2: + "threads" store; saveThread, getThread, listThreads, deleteThread (+ its corpora)
 /background/pipeline.js      runScan unchanged; a thin scanIntoThread(tabId, threadId, opts) wraps it with G3
 /background/service-worker.js  panel-threads, panel-cache-hit, panel-delete-thread, panel-find over a thread's corpora
-/content/anchor.js           reanchorBlocks(stored blocks) → rebuilds __summarizerRanges
+/content/anchor.js           reanchorBlocks(stored blocks) → rebuilds __docentRanges
 /content/bootstrap.js        + "reanchor-blocks" handler
 /lib/panel-state.js          + selectedThreadId, threads list, cache-hit status/toast, rescan
 /sidepanel/*                 thread picker, toast, Rescan, page badges on find results

@@ -88,7 +88,7 @@ This solves the re-anchoring problem Phase A flagged. It lives in `content/ancho
 5. **Still nothing**: the block is unanchored (`anchored: false`). It stays in its section and remains usable for retrieval; it just can't be highlighted live, and F falls back to snippet mode for it.
 6. Each block gets a serializable anchor `{exact, prefix, suffix}`, with ~32 chars of context either side, for later re-anchoring after reload (F3) or when a stored `Range` has gone stale (`!range.startContainer.isConnected`, e.g. after an SPA re-render).
 
-Ranges stay in `globalThis.__summarizerRanges: Map<blockId, Range>` in the content script. Only anchors and the `anchored` flag leave it.
+Ranges stay in `globalThis.__docentRanges: Map<blockId, Range>` in the content script. Only anchors and the `anchored` flag leave it.
 
 Known limits, consistent with Phase A's log: text inside shadow roots and iframes isn't indexed, and text the page renders differently from its DOM (CSS `text-transform`, `::before` content) won't match. Both degrade to unanchored blocks, never to errors.
 
@@ -159,7 +159,7 @@ Section {
 ## Test harness (extends Phase A's)
 
 - The toolbar click runs A, then B, and logs `console.table` rows `{i, heading, headingSource, method, words, anchored: "7/8", summary}` plus totals: section count, anchoring rate, and the time spent on blocks, anchoring, embedding and LLM.
-- `highlightSection(tabId, i)` messages the content script to put that section's Ranges into a test `Highlight` (`::highlight(summarizer-debug)`), so you can see whether anchoring landed on the right text. `clearHighlight(tabId)` removes it.
+- `highlightSection(tabId, i)` messages the content script to put that section's Ranges into a test `Highlight` (`::highlight(docent-debug)`), so you can see whether anchoring landed on the right text. `clearHighlight(tabId)` removes it.
 - `scan(tabId, { llm: false })` skips B3, to save quota while tuning B1/B2.
 - `setGeminiKey(key)` stores the key.
 
@@ -222,3 +222,5 @@ Once unit tests pass and CP-B1/CP-B2 pass, build A5 (`phase-A5-special-sources.m
 
 > **Changed 2026-11-05 (combined run test 7, approved by the user):** B1 drops back-matter sections (References, Notes, Bibliography, Further reading, External links, etc. — `REFERENCE_HEADINGS` / `isReferenceHeading` in `lib/sections-headings.js`), including their sub-sections. Whole-heading matches only. See master-spec §3.2. The user chose not to remove Wikipedia infoboxes.
 
+
+> **Changed 2026-11-07 (user request): permalink marks dropped from headings.** Sphinx, MkDocs and Docusaurus put a permalink anchor inside each heading, so section headings read "4.1. if Statements¶". `headingText` (`lib/text.js`) drops ¶ § 🔗 ⚓ at either end of a heading, and a trailing "#" only after a space, so "C#" keeps it. The page's own text (with the mark) stays the `anchorText`, so anchoring is unchanged: Python tutorial re-anchored 206/206 blocks.

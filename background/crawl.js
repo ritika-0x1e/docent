@@ -60,13 +60,13 @@ async function crawlLinks({ threadId, from, links }, onProgress = () => {}) {
         }
         thread = saved;
         added++;
-        console.log(`[Summarizer/D6] added "${page.title}" (${page.sections.length} sections, linked from "${from.title}" via "${link.anchorText}")`);
+        console.log(`[Docent/D6] added "${page.title}" (${page.sections.length} sections, linked from "${from.title}" via "${link.anchorText}")`);
         onProgress({ stage: "added", url: link.url, title: page.title, thread });
       } catch (err) {
         if (controller.signal.aborted) break;
         if (err.message === "This thread was deleted.") throw err;
         const error = err.name === "TimeoutError" ? "The site took too long to answer." : err.message;
-        console.warn(`[Summarizer/D6] couldn't add ${link.url}: ${error}`);
+        console.warn(`[Docent/D6] couldn't add ${link.url}: ${error}`);
         failed.push({ url: link.url, anchorText: link.anchorText, error });
         onProgress({ stage: "failed", url: link.url, error });
       }

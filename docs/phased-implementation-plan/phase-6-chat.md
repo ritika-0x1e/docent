@@ -168,3 +168,8 @@ Also from the user's testing:
 - [x] Decisions 1–4 signed off *(2026-11-07; decision 1 as the model ladder)*
 - [x] `npm test` passes, with new tests for prompt building, citation parsing and message trimming (`lib/chat-prompt.js`) *(122/122, including `lib/gemini-ladder.test.js`)*
 - [ ] Checks 1–8 pass *(automated run: all but 4, which fails with qwen 1.5b, and 8, which isn't rerun yet; 1 and 4 to be confirmed with Gemini)*
+
+> **Changed 2026-11-07 (README screenshots and measurements, asked for by the user):**
+> - **Colon lead-ins aren't checked.** "The steps to do this are:" was underlined on most list answers (every MDN take). An answer sentence ending in ":" with no digit isn't a claim (`isClaim`, `lib/grounding.js`); one with a digit still is.
+> - **Grounding check: same verdicts, less embedding.** It took 7–20 s on long docs pages, because every source sentence starts a 45-word window. Now only sentences the word and number checks don't already settle are embedded (`needsSimilarity`); if none are, no windows are embedded at all. Window vectors are cached in memory (up to 4,000) for follow-up questions. Verdicts are unchanged by construction (a unit test checks it). On the MDN and Python screenshot questions the check went from 0.4–8 s to 0.0 s.
+> - **404 parks a model for 30 days.** `gemini-2.5-flash` is still in the model list but answers 404 "no longer available to new users", and was asked again on every question that fell that far. `parkedUntil("gone")`.

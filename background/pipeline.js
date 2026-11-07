@@ -71,7 +71,7 @@ const PING_TIMEOUT_MS = 800;
 async function isAlreadyInjected(tabId) {
   const [injection] = await chrome.scripting.executeScript({
     target: { tabId },
-    func: () => globalThis.__summarizerContentLoaded === true,
+    func: () => globalThis.__docentContentLoaded === true,
   });
   if (injection?.result !== true) return false;
   const pong = await Promise.race([
@@ -265,9 +265,9 @@ async function loadSavedScan(tabId, thread, { corpus, sections }, onProgress) {
     const anchored = new Set(reply?.anchored ?? []);
     live = sections.map((s) => ({ ...s, blocks: s.blocks.map((b) => ({ ...b, anchored: anchored.has(b.id) })) }));
     const total = blocks.length;
-    console.log(`[Summarizer/G3] cache hit: ${corpus.title}; re-anchored ${anchored.size}/${total} blocks, nothing embedded`);
+    console.log(`[Docent/G3] cache hit: ${corpus.title}; re-anchored ${anchored.size}/${total} blocks, nothing embedded`);
   } else {
-    console.log(`[Summarizer/G3] cache hit: ${corpus.title} (Google Doc, jump only), nothing embedded`);
+    console.log(`[Docent/G3] cache hit: ${corpus.title} (Google Doc, jump only), nothing embedded`);
   }
 
   await chrome.storage.session.set({

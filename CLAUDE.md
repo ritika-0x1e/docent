@@ -1,4 +1,4 @@
-# Summarizer — CLAUDE.md
+# Docent — CLAUDE.md
 
 This file orients Claude Code (or any agentic coding session) working in this repo. Read this first, then `docs/master-spec.md` for full context before touching any sub-feature.
 

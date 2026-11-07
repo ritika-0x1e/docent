@@ -113,9 +113,10 @@ function parseBlocks(contentEl, { headingTags = DEFAULT_HEADING_TAGS } = {}) {
 
     const plain = normalizeText(el.textContent || "");
     if (!plain) continue;
-    const text = normalizeText(readableText(el)) || plain;
-
     const isHeading = headings.has(el.tagName);
+    const read = normalizeText(readableText(el)) || plain;
+    const text = isHeading ? headingText(read) : read;
+
     blocks.push({
       id: `b${blocks.length}`,
       type: isHeading ? "heading" : "text",

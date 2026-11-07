@@ -1,6 +1,6 @@
 ---
 name: scan-button-state-machine
-description: Use when implementing or modifying the side panel's initial state and "Start scan" button behavior for the Summarizer (sub-features H1–H4) — the four-state matrix governing whether the extraction pipeline runs, based on whether a thread is selected and whether the current page is already in that thread.
+description: Use when implementing or modifying the side panel's initial state and "Start scan" button behavior for the Docent (sub-features H1–H4) — the four-state matrix governing whether the extraction pipeline runs, based on whether a thread is selected and whether the current page is already in that thread.
 ---
 
 # Scan button state machine

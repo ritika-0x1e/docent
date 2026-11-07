@@ -17,10 +17,10 @@ const CITE_PALETTE = [
 
 const CITATION_CSS = [
   ...CITE_PALETTE.flatMap(([r, g, b], i) => [
-    `::highlight(summarizer-cite-${i}) { background-color: rgba(${r}, ${g}, ${b}, 0.32); }`,
-    `::highlight(summarizer-cite-ctx-${i}) { text-decoration: underline 2px rgba(${r}, ${g}, ${b}, 0.85); text-underline-offset: 3px; }`,
+    `::highlight(docent-cite-${i}) { background-color: rgba(${r}, ${g}, ${b}, 0.32); }`,
+    `::highlight(docent-cite-ctx-${i}) { text-decoration: underline 2px rgba(${r}, ${g}, ${b}, 0.85); text-underline-offset: 3px; }`,
   ]),
-  "::highlight(summarizer-flash) { background-color: rgba(56, 152, 255, 0.22); }",
+  "::highlight(docent-flash) { background-color: rgba(56, 152, 255, 0.22); }",
 ].join("\n");
 
 const styledTabs = new Set(); // per service-worker lifetime; inserting twice is harmless

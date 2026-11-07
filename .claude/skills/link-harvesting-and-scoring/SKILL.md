@@ -1,6 +1,6 @@
 ---
 name: link-harvesting-and-scoring
-description: Use when implementing or modifying the link-harvesting picklist for the Summarizer (sub-features D1–D5) — harvesting inline vs nav links from a page, scoring them, allocating the top-20 picklist slots between categories with backfill, and the picklist UI itself. This is project-specific logic, not a general web-scraping pattern.
+description: Use when implementing or modifying the link-harvesting picklist for the Docent (sub-features D1–D5) — harvesting inline vs nav links from a page, scoring them, allocating the top-20 picklist slots between categories with backfill, and the picklist UI itself. This is project-specific logic, not a general web-scraping pattern.
 ---
 
 # Link harvesting and scoring

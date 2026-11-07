@@ -1,6 +1,6 @@
 ---
 name: thread-data-model
-description: Use when implementing or modifying thread persistence and cross-page attachment for the Summarizer (sub-features G1–G4) — the IndexedDB schema for threads, attaching a new page's corpus to an existing thread, and detecting already-scanned pages.
+description: Use when implementing or modifying thread persistence and cross-page attachment for the Docent (sub-features G1–G4) — the IndexedDB schema for threads, attaching a new page's corpus to an existing thread, and detecting already-scanned pages.
 ---
 
 # Thread data model
