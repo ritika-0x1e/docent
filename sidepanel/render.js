@@ -353,9 +353,39 @@ function citeTitle(source, tab, action) {
   return `${source.n}. ${where || "Source"}${does}`;
 }
 
+// A quote's short form: its first words, then "…". Shown as a link; clicking highlights it on the page.
+const QUOTE_WORDS = 14;
+function shortQuote(text) {
+  // Footnote markers ("style.[4]") are dropped from what's shown; the full text, used to find the
+  // quote on the page, keeps them.
+  const words = text.replace(/\[(?:\d+|[a-z]{1,2})\]/gi, "").replace(/\s+/g, " ").trim().split(" ");
+  return words.length > QUOTE_WORDS ? `${words.slice(0, QUOTE_WORDS).join(" ")}…` : words.join(" ");
+}
+
+// The quote as a link-styled button: highlights the text on its page (opening the page if needed),
+// and clears it on a second click, like a citation.
+function quoteLink(quote, key, tab, handlers, activeKey) {
+  const pageUrl = quote.pageUrl ?? tab?.url ?? null;
+  // Google Docs draws its text on a canvas, so a quote from one can't be highlighted: plain text.
+  if (/^https:\/\/docs\.google\.com\/document\//.test(pageUrl ?? "")) {
+    return el("span", { class: "quote-link plain", text: `“${shortQuote(quote.text)}”`, title: "From a Google Doc: it can't be highlighted on the page" });
+  }
+  const source = { n: 0, selection: true, highlightable: true, quote: quote.text, pageUrl, pageTitle: quote.pageTitle ?? null };
+  const active = activeKey === key;
+  const action = citationAction(source, tab, active);
+  const button = el("button", { type: "button", class: `quote-link${active ? " active" : ""}`, text: `“${shortQuote(quote.text)}”`, title: action ? `${action.label}` : "Selected text" });
+  if (action && handlers.onCitation) button.addEventListener("click", () => handlers.onCitation(key, source, action));
+  return button;
+}
+
 // question: the user message this answers (for Ask anyway); last: the newest message in the log.
 function chatMessage(message, tab, handlers, { question = null, last = false, activeKey = null } = {}) {
-  if (message.role === "user") return el("div", { class: "msg user" }, [el("p", { text: message.content })]);
+  if (message.role === "user") {
+    const kids = [];
+    if (message.quote?.text) kids.push(quoteLink(message.quote, `${message.createdAt ?? "pending"}:quote`, tab, handlers, activeKey));
+    kids.push(el("p", { text: message.content }));
+    return el("div", { class: "msg user" }, kids);
+  }
   const node = el("div", { class: "msg assistant" });
   const messageKey = message.createdAt ?? "pending";
   // An [n] chip goes straight to the page (user, 2026-11-07): it highlights the source there, opening
@@ -388,7 +418,13 @@ function chatMessage(message, tab, handlers, { question = null, last = false, ac
       : null;
 
   // Hallucination control (lib/grounding.js), said plainly under the answer.
-  if (message.gated) {
+  if (message.explainGated) {
+    // Explain mode's gate: no Ask anyway, which would let any question through with general knowledge.
+    const kids = [el("span", { text: "With text selected, questions have to be about that text, so the model wasn't asked. Clear the selection to ask about the pages." })];
+    const web = webButton();
+    if (web) kids.push(web);
+    node.append(el("div", { class: "grounding-note" }, kids));
+  } else if (message.gated) {
     const kids = [el("span", { text: "No part of the pages is close to this question, so the model wasn't asked." })];
     if (last && question && handlers.onAskAnyway) kids.push(el("button", { type: "button", class: "link small", text: "Ask anyway", onclick: () => handlers.onAskAnyway(question) }));
     const web = webButton();
@@ -400,7 +436,7 @@ function chatMessage(message, tab, handlers, { question = null, last = false, ac
   if (message.rejected) {
     node.append(
       el("details", { class: "rejected" }, [
-        el("summary", { text: "The model answered, but none of it is in the sources" }),
+        el("summary", { text: message.drifted ? "The model's answer wasn't about your selection" : "The model answered, but none of it is in the sources" }),
         el("p", { class: "muted small", text: "Probably from its own memory, possibly wrong. Hidden for that reason:" }),
         el("p", { class: "rejected-text", text: message.rejected }),
       ])
@@ -411,7 +447,7 @@ function chatMessage(message, tab, handlers, { question = null, last = false, ac
   }
 
   const notes = [];
-  if (message.mode === "selection") notes.push("From your selection");
+  if (message.mode === "selection") notes.push(message.explainGated ? "From your selection" : "From your selection · explained");
   if (message.stopped) notes.push(message.cutOff ? "Cut off: the model stopped responding" : "Stopped");
   const label = modelLabel(message);
   if (label) notes.push(`${label}${FALLBACK_TEXT[message.fallback] ? ` (${FALLBACK_TEXT[message.fallback]})` : ""}`);
@@ -438,13 +474,28 @@ function chatMessage(message, tab, handlers, { question = null, last = false, ac
  * @param {{pending, failed}} live  the answer in progress, or the last one that failed (not saved);
  *   each {threadId, question, text, mode, status, error} or null (panel.js)
  */
-function renderChat(state, { pending, failed, activeCitation, confirmingClear }, dom, handlers) {
+// The quote waiting above the composer, for the active tab only.
+function renderComposerQuote(quote, tab, dom, handlers, activeKey) {
+  const box = dom.chatQuote;
+  if (!quote || quote.tabId !== tab?.tabId) {
+    box.hidden = true;
+    return box.replaceChildren();
+  }
+  box.hidden = false;
+  const remove = el("button", { type: "button", class: "icon quote-remove", onclick: handlers.onRemoveQuote });
+  setIcon(remove, "close", "Remove the selected text");
+  box.replaceChildren(el("span", { class: "quote-label", text: "About" }), quoteLink({ text: quote.text, pageUrl: tab?.url }, "composer:quote", tab, handlers, activeKey), remove);
+}
+
+function renderChat(state, { pending, failed, activeCitation, confirmingClear, quote }, dom, handlers) {
   const tab = activeTab(state);
   const { thread } = threadView(state);
   const chatThread = tab?.threadId ? thread : null; // detached: a new thread starts on the next scan
   const busy = Boolean(pending);
   const canAsk = Boolean(chatThread) && !busy;
 
+  // Before anything that returns early (an empty chat still shows an attached quote).
+  renderComposerQuote(quote, tab ? { ...tab, tabId: state.activeTabId } : null, dom, handlers, activeCitation?.key ?? null);
   dom.chatInput.disabled = !chatThread;
   dom.chatSend.disabled = !canAsk;
   dom.chatSend.hidden = busy;
@@ -463,7 +514,7 @@ function renderChat(state, { pending, failed, activeCitation, confirmingClear },
   if (pending?.force && messages.at(-1)?.gated && messages.at(-2)?.content === pending.question) messages = messages.slice(0, -2);
   const shown = pending ?? failed;
   if (shown && shown.threadId === chatThread?.id) {
-    messages.push({ role: "user", content: shown.question });
+    messages.push({ role: "user", content: shown.question, ...(shown.quote && { quote: shown.quote }) });
     messages.push({ role: "assistant", content: shown.text, pending: Boolean(pending), checking: shown.checking, status: shown.status, error: shown.error, mode: shown.mode });
   }
   if (!messages.length) {

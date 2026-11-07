@@ -64,16 +64,37 @@ function listenForHandshake(tabId, timeoutMs) {
 // same page must not re-inject: lib/classify.js's top-level consts would throw on redeclaration
 // and bootstrap.js would stack a duplicate onMessage listener. bootstrap.js sets this flag once it's up.
 // This probe is itself an executeScript call, so restricted URLs reject here (A4: injection-rejected).
+// Loaded and alive: the flag alone isn't enough, since a script left behind by an extension reload
+// keeps its flag but is cut off. A live one answers a ping.
+const PING_TIMEOUT_MS = 800;
+
 async function isAlreadyInjected(tabId) {
   const [injection] = await chrome.scripting.executeScript({
     target: { tabId },
     func: () => globalThis.__summarizerContentLoaded === true,
   });
-  return injection?.result === true;
+  if (injection?.result !== true) return false;
+  const pong = await Promise.race([
+    chrome.tabs.sendMessage(tabId, { type: "ping" }).catch(() => null),
+    new Promise((resolve) => setTimeout(() => resolve(null), PING_TIMEOUT_MS)),
+  ]);
+  return pong?.ok === true;
 }
 
 // Injects the content scripts unless they're already there; { blocked: false } once they answer.
-async function ensureInjected(tabId) {
+// One injection per tab at a time: several features can ask at once (auto-load, reading the
+// selection, a highlight), and two checks that both saw "not there yet" injected twice, which
+// redeclared every content-script constant ("Identifier … has already been declared", 2026-11-07).
+const injecting = new Map(); // tabId → the injection in flight
+
+function ensureInjected(tabId) {
+  if (injecting.has(tabId)) return injecting.get(tabId);
+  const run = injectOnce(tabId).finally(() => injecting.delete(tabId));
+  injecting.set(tabId, run);
+  return run;
+}
+
+async function injectOnce(tabId) {
   let alreadyInjected;
   try {
     alreadyInjected = await isAlreadyInjected(tabId);

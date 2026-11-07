@@ -2,7 +2,7 @@
 // live page. Live Ranges stay in this content script; only serializable anchors leave it.
 // See docs/phased-implementation-plan/phase-B-sectioning.md ("Anchoring").
 
-const SKIP_SELECTOR = "script, style, noscript, template, textarea";
+var SKIP_SELECTOR = "script, style, noscript, template, textarea";
 
 // Block id → live Range, for the most recent scan of this page.
 globalThis.__summarizerRanges = globalThis.__summarizerRanges || new Map();

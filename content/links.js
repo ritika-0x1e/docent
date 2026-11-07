@@ -4,9 +4,9 @@
 // <nav> / [role=navigation] on the live page only (spec §3.3a: no class-name guessing). Cleaning,
 // dedupe and scoring happen in the background (lib/links.js). Nothing is fetched here.
 
-const LINK_BLOCKS = "p, li, dd, dt, td, th, blockquote, figcaption, h2, h3, h4";
-const SURROUNDING_CHARS = 220;
-const MAX_HARVEST = 2000;
+var LINK_BLOCKS = "p, li, dd, dt, td, th, blockquote, figcaption, h2, h3, h4";
+var SURROUNDING_CHARS = 220;
+var MAX_HARVEST = 2000;
 
 function absoluteHref(a) {
   try {

@@ -125,6 +125,45 @@ Also from the user's testing:
 - **At least 5 sections** again: blended retrieval is now the plain top 5 plus the centred top 4 (capped at 8). It gave 4 when the two rankings overlapped.
 - **Answer sentences** now split like source text ("Chester A. Arthur" isn't two sentences). The split had cut a cited claim in half, so its citation fell back to the whole section.
 
+## Explain mode and quotes (2026-11-07, user)
+- With a selection, answers may use general knowledge to explain it, given the selected text and its paragraph. The label reads "From your selection · explained". The grounding check is off for these, since the explanation is meant to go beyond the text.
+- **Guards** (`lib/explain-guard.js`):
+  - Before the call, the question has to be about the selection.
+  - After it, the answer has to stay on it.
+  - Explanations get a short output cap (Gemini 1,200 tokens including thinking; Ollama 450).
+  - The prompt says to decline other tasks.
+- **Gate measurements:** three selections (a word, a style name, a code signature).
+  - Specific on-topic questions scored 0.19–0.67; off-topic ones (essay, recipe, poem, "ignore the text…") −0.07–0.09. The question cutoff is 0.15.
+  - Plain explain requests ("what does this mean?") score low, so they pass by their words instead.
+  - On-topic answers scored 0.47–0.85, off-topic 0.10 or less. The answer cutoff is 0.25.
+- **Tested** with qwen:
+  - "what does this mean?" on "metonym" was explained in context (answer 0.63).
+  - "how do I make pasta carbonara" was refused without asking the model.
+  - "explain this. then write python code…" was refused.
+- **Quotes:** drag selected text onto the chat, or press Ctrl+Esc on the page (content script; only on pages the panel has read; Windows keeps Ctrl+Esc for its Start menu).
+  - The quote sits above the box as a short line (14 words) with ×.
+  - Sent, it's a link in the bubble: clicking highlights the text on the page, and clicking again clears it.
+  - Follow-up turns carry the start of the quote in the history.
+  - Tested: Ctrl+Esc, drop, sending, the saved quote, highlight and clear.
+
+- **Google Docs (2026-11-07):**
+  - The page itself reports no selection, because Docs draws its text on a canvas. But Docs mirrors the selected text into a hidden same-origin frame it uses for copy and paste, and keys go to that frame, not the page.
+  - So the selection is read from same-origin frames when the page shows none, and Ctrl+Esc listens there too. Both were tested on a real mouse selection in a Doc.
+  - The surrounding paragraph comes from the Doc's saved scan (the block containing the selection).
+  - Quotes from a Doc are plain text, not links, since a canvas can't be highlighted.
+- **Fixed:** "what’s this?" with a curly apostrophe was refused as off-topic, because "what’s" split into "what" + "s". Apostrophes are now normalised, and fragments under 3 letters never count as new words.
+
+- **Guards redesigned (user: a hard-coded list of phrasings fails on unseen wording).** Explain-mode checks are now decided by meaning:
+  - A question's leftover words pass if they're close to the selection or to example "help me understand" requests.
+  - The question check refuses only clear misses; the answer check is the backstop (whole answer ≥ 0.25 and at least half its sentences ≥ 0.2).
+  - **Unseen phrasings** ("what's the deal with this", "I'm lost here", "huh?", "say it like I'm twelve", "what's the author getting at"…): all 14 passed.
+  - **Tasks:** 5 of 10 were refused before the model (cover letter, workout plan, cooking rice, a flight, debugging).
+  - **The other 5, run with qwen:**
+    - footballer: the model declined.
+    - miles to km and Elon Musk: hidden.
+    - Netflix: the model stayed on Genesis.
+    - 17 × 23: hidden. On an earlier run it leaked, with arithmetic plus one line about the selection. That's why the per-sentence rule exists.
+
 ## Exit criteria for phase 6
 - [x] Decisions 1–4 signed off *(2026-11-07; decision 1 as the model ladder)*
 - [x] `npm test` passes, with new tests for prompt building, citation parsing and message trimming (`lib/chat-prompt.js`) *(122/122, including `lib/gemini-ladder.test.js`)*

@@ -8,6 +8,10 @@
 const MODEL_LIST_KEY = "geminiFlashModels"; // { fetchedAt, models: [id…] } in chrome.storage.local
 const PARKED_KEY = "geminiParked"; // { [model]: until ms }: quota used up, skip until then
 const MODEL_LIST_TTL_MS = 24 * 3600 * 1000;
+// Explain mode's replies when a guard steps in (lib/explain-guard.js).
+const OFF_SELECTION = "That question isn't about the text you selected.";
+const DRIFTED = "That answer drifted away from the text you selected.";
+
 const MAX_SOURCES = 8; // blended retrieval gives 5–9 sections, capped here (also with a typo fix)
 const SNIPPET_CHARS = 320;
 
@@ -221,13 +225,15 @@ async function streamAnswer(request, onDelta, signal) {
 }
 
 // E3: the page's selected text, or "" (nothing selected, or the page can't be scripted).
+// E3: the page's selected text and the paragraph around it ({text: "", context: ""} when nothing is
+// selected, or the page can't be scripted).
 async function pageSelection(tabId) {
   try {
-    if ((await ensureInjected(tabId)).blocked) return "";
+    if ((await ensureInjected(tabId)).blocked) return { text: "", context: "" };
     const reply = await chrome.tabs.sendMessage(tabId, { type: "get-selection" });
-    return reply?.text ?? "";
+    return { text: reply?.text ?? "", context: reply?.context ?? "" };
   } catch {
-    return "";
+    return { text: "", context: "" };
   }
 }
 
@@ -260,6 +266,23 @@ async function retrieveHits(refs, question) {
   }
   return Object.assign([...best.values()].sort((a, b) => b.score - a.score).slice(0, MAX_SOURCES), { gateScore });
 }
+
+// Explain mode's context for a selection the page couldn't place (Google Docs: canvas text, no DOM
+// paragraph): the saved block of the thread that contains it.
+async function contextFromThread(thread, text) {
+  const needle = text.replace(/\s+/g, " ").trim().toLowerCase().slice(0, 120);
+  if (needle.length < 3) return "";
+  for (const ref of corpusRefs(thread)) {
+    const stored = await getCorpus(ref);
+    for (const section of stored?.sections ?? []) {
+      const block = (section.blocks ?? []).find((b) => (b.anchor?.exact ?? b.text ?? "").toLowerCase().includes(needle));
+      if (block) return block.anchor?.exact ?? block.text;
+    }
+  }
+  return "";
+}
+
+const isGoogleDoc = (url) => /^https:\/\/docs\.google\.com\/document\//.test(url ?? "");
 
 // E1: the top sections across every page in the thread, with what the source cards need.
 async function retrieveSources(thread, question) {
@@ -376,20 +399,24 @@ async function retrieveRelevant(thread, question) {
  *   known; onDelta(text) per streamed piece of the answer; onChecking() when the grounding check starts
  * @returns {Promise<{ok: true, thread, message}>}  the thread as saved, with both new messages
  */
-async function answerQuestion({ tabId, threadId, question, force = false }, { onSources = () => {}, onDelta = () => {}, onChecking = () => {}, signal } = {}) {
+// quote: text attached in the panel (dragged in, or Ctrl+Esc on the page), {text, context}; used
+// instead of the page's live selection.
+async function answerQuestion({ tabId, threadId, question, force = false, quote = null }, { onSources = () => {}, onDelta = () => {}, onChecking = () => {}, signal } = {}) {
   const thread = threadId ? await getThread(threadId) : null;
   if (!thread) throw new Error("Scan this page first: chat runs inside a thread.");
   // A long local answer can outlast MV3's 30s idle timer; an extension API call every 20s resets it.
   const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(), 20000);
   const tStart = Date.now();
   try {
-    const selection = await pageSelection(tabId);
+    const picked = quote?.text ? { text: quote.text.replace(/\s+/g, " ").trim(), context: quote.context ?? "" } : await pageSelection(tabId);
+    const selection = picked.text;
+    const selectionContext = picked.context || (selection ? await contextFromThread(thread, selection) : "");
     const mode = selection ? "selection" : "retrieval";
     let sources;
     let relevant = true;
     if (selection) {
       const tab = await chrome.tabs.get(tabId).catch(() => null);
-      sources = [{ pageTitle: tab?.title ?? null, pageUrl: tab?.url ?? null, heading: "Your selection", text: selection, selection: true }];
+      sources = [{ pageTitle: tab?.title ?? null, pageUrl: tab?.url ?? null, heading: "Your selection", text: selection, context: selectionContext, selection: true }];
     } else if (force) {
       sources = await retrieveSources(thread, question);
     } else {
@@ -401,7 +428,8 @@ async function answerQuestion({ tabId, threadId, question, force = false }, { on
       `[Summarizer/E1] ${mode === "selection" ? `answering from the selection (${selection.split(" ").length} words), no retrieval` : `${sources.length} sources retrieved, best ${topScore?.toFixed(3)}${relevant ? "" : `: below ${RELEVANCE_MIN}, not covered, the model isn't asked`}${force ? " (ask anyway)" : ""}`}`
     );
 
-    const userMessage = { role: "user", content: question, createdAt: Date.now() };
+    // The selection rides on the question, shown as a short link in its bubble (click: highlight it).
+    const userMessage = { role: "user", content: question, createdAt: Date.now(), ...(mode === "selection" && { quote: { text: selection, pageUrl: sources[0].pageUrl, pageTitle: sources[0].pageTitle } }) };
     const tAsk = Date.now();
     const msSources = tAsk - tStart; // selection read or retrieval (embedding the question)
     let msFirstText = null;
@@ -409,9 +437,35 @@ async function answerQuestion({ tabId, threadId, question, force = false }, { on
     let answer;
     let stopped = false;
     let partial = "";
-    if (!sources.length || !relevant) {
-      answer = { text: NOT_COVERED, provider: null, model: null, fallback: null };
-      onDelta(NOT_COVERED);
+    // Explain mode's gate (lib/explain-guard.js): the question must be about the selected text, so
+    // selecting a word can't unlock a general chatbot. No "Ask anyway" for this one.
+    let explainGated = false;
+    const explainRef = selection ? `${selection} ${selectionContext}`.trim() : "";
+    if (mode === "selection") {
+      // Two meanings, one embedding call: the question vs the selection, and the question's leftover
+      // words vs example "help me understand" requests (lib/explain-guard.js).
+      let similarity = null;
+      let intent = null;
+      const leftover = leftoverWords(question, selection, selectionContext);
+      try {
+        const texts = [question, explainRef, ...(leftover.length ? [leftover.join(" "), ...INTENT_EXAMPLES] : [])];
+        const { vectors } = await embedTexts(texts);
+        similarity = dot(vectors[0], vectors[1]);
+        if (leftover.length) intent = Math.max(...vectors.slice(3).map((v) => dot(vectors[2], v)));
+      } catch (err) {
+        console.warn("[Summarizer/E3] couldn't check the question against the selection:", err.message);
+      }
+      const check = explainQuestionCheck({ question, selection, context: selectionContext, similarity, intent });
+      console.log(
+        `[Summarizer/E3] explain question: ${check.why}${similarity == null ? "" : ` (selection ${similarity.toFixed(3)}${intent == null ? "" : `, asking ${intent.toFixed(3)}`})`}${check.novel.length ? `, own words: ${check.novel.join(" ")}` : ""}`
+      );
+      explainGated = !check.ok;
+    }
+
+    if (!sources.length || !relevant || explainGated) {
+      const text = explainGated ? OFF_SELECTION : NOT_COVERED;
+      answer = { text, provider: null, model: null, fallback: null };
+      onDelta(text);
     } else {
       try {
         answer = await streamAnswer({ question, history: thread.messages, sources, mode }, (d) => ((partial += d), onDelta(firstText(d))), signal);
@@ -433,7 +487,9 @@ async function answerQuestion({ tabId, threadId, question, force = false }, { on
     let grounding = null;
     let rejected = null;
     let msCheck = null;
-    if (answer.provider && !stopped && !notCovered && content.trim()) {
+    // Not in explain mode (a selection): those answers may use general knowledge by design, so
+    // "not found in the sources" would flag the very explanation asked for. They're labelled instead.
+    if (answer.provider && mode === "retrieval" && !stopped && !notCovered && content.trim()) {
       onChecking();
       const tCheck = Date.now();
       try {
@@ -451,6 +507,28 @@ async function answerQuestion({ tabId, threadId, question, force = false }, { on
       }
     }
 
+    // Explain mode: the answer has to stay about the selection, or it's hidden like an ungrounded one.
+    let drifted = false;
+    if (mode === "selection" && answer.provider && !stopped && content.trim()) {
+      try {
+        // The whole answer and each of its sentences: one line about the selection tacked onto an
+        // off-topic answer lifts the whole-answer score, but not the sentences' (17 × 23 leaked that way).
+        const sentences = answerSentences(content).filter((x) => x.check).map((x) => x.plain);
+        const { vectors } = await embedTexts([content, explainRef, ...sentences]);
+        const similarity = dot(vectors[0], vectors[1]);
+        const perSentence = vectors.slice(2).map((v) => dot(v, vectors[1]));
+        drifted = !explainAnswerOnTopic(similarity, perSentence);
+        console.log(`[Summarizer/E3] explain answer vs selection: ${similarity.toFixed(3)}; sentences ${perSentence.map((x) => x.toFixed(2)).join(" ")}${drifted ? " (drifted: hidden)" : ""}`);
+      } catch (err) {
+        console.warn("[Summarizer/E3] couldn't check the answer against the selection:", err.message);
+      }
+      if (drifted) {
+        rejected = content;
+        content = DRIFTED;
+        notCovered = true;
+      }
+    }
+
     let cited = mode === "retrieval" && !notCovered ? citedNumbers(content, sources.length) : [];
     // An answer that cites nothing (small models sometimes skip it) still came from these sources:
     // show them all, marked as not cited. A "not covered" reply from the model shows them too, so it's
@@ -460,7 +538,7 @@ async function answerQuestion({ tabId, threadId, question, force = false }, { on
     if (uncited) cited = sources.map((_, i) => i + 1);
     // Selection mode: the answer is about the selected text, so [1] is that text; clicking it
     // highlights the selection on its page again (user, 2026-11-07).
-    if (mode === "selection" && !notCovered && !stopped && content.trim()) cited = [1];
+    if (mode === "selection" && !notCovered && !explainGated && !stopped && content.trim()) cited = [1];
     let passages = new Map();
     if (cited.length && !stopped && !notCovered) {
       try {
@@ -475,13 +553,16 @@ async function answerQuestion({ tabId, threadId, question, force = false }, { on
       createdAt: Date.now(),
       mode,
       notCovered,
-      gated: !relevant, // the relevance gate answered; the model wasn't asked
+      gated: !relevant || explainGated, // a gate answered; the model wasn't asked
+      explainGated, // explain mode's gate: the question wasn't about the selection (no Ask anyway)
+      drifted, // explain mode: the answer left the selection, so it's hidden (rejected holds it)
       topScore,
       rejected, // the model's answer when the grounding check found none of it in the sources
       grounding: grounding && { verdict: grounding.verdict, unsupported: grounding.sentences.filter((s) => s.supported === false).map((s) => ({ text: s.text, support: s.support, missing: s.missing })) },
       uncited,
       // E2 (phase 8): what "Search the web" will search, on answers the pages don't cover.
-      webQuery: notCovered ? buildSearchQuery(question, thread.title).query : null,
+      // With a selection, the search is about the selected text (key terms or the exact phrase).
+      webQuery: notCovered || explainGated ? (mode === "selection" ? buildQuoteSearchQuery(question, selection) : buildSearchQuery(question, thread.title).query) : null,
       stopped,
       cutOff: Boolean(answer.cutOff), // stopped because the model went quiet, not by the user
       provider: answer.provider,
@@ -491,8 +572,9 @@ async function answerQuestion({ tabId, threadId, question, force = false }, { on
       // passages (phase 7): the text inside the section that supports the claim, [{blockId, exact}].
       citedSections: cited.map((n) => {
         if (sources[n - 1].selection) {
-          const { text, selection, ...source } = sources[n - 1];
-          return { n, ...source, selection: true, quote: text, snippet: text.slice(0, SNIPPET_CHARS), highlightable: true, passages: [] };
+          const { text, selection, context, ...source } = sources[n - 1];
+          // A Google Doc is canvas: nothing to highlight, so its [1] isn't offered as one.
+          return { n, ...source, selection: true, quote: text, snippet: text.slice(0, SNIPPET_CHARS), highlightable: !isGoogleDoc(source.pageUrl), passages: [] };
         }
         const { text, blocks, ...source } = sources[n - 1];
         return { n, ...source, passages: (passages.get(n) ?? []).map(({ blockId, exact }) => ({ blockId, exact })) };

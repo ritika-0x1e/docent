@@ -4,11 +4,11 @@
 //   "dom"      → Readability on the live page (Phase A)
 // See docs/phased-implementation-plan/phase-A5-special-sources.md.
 
-const MARKDOWN_CONTENT_TYPES = new Set(["text/markdown", "text/x-markdown"]);
-const GDOCS_HEADING_TAGS = ["H1", "H2", "H3", "H4"];
+var MARKDOWN_CONTENT_TYPES = new Set(["text/markdown", "text/x-markdown"]);
+var GDOCS_HEADING_TAGS = ["H1", "H2", "H3", "H4"];
 
 // Thrown for source-specific failures that deserve their own user-facing message (not A4's).
-class SourceError extends Error {
+var SourceError = class SourceError extends Error {
   constructor(reason, detail) {
     super(detail);
     this.reason = reason;
@@ -116,8 +116,8 @@ function addOutlineJumps(sections, blocks) {
 // Docs' outline items are Closure UI components: they react to a mousedown/mouseup sequence, not
 // to a bare click() or keyboard events (both tried, CP-A5-1). The class names are Docs internals,
 // so this is the most fragile selector in the project — the failure message says what to check.
-const OUTLINE_ITEM_SELECTOR = ".navigation-item";
-const OUTLINE_TEXT_SELECTOR = ".navigation-item-content";
+var OUTLINE_ITEM_SELECTOR = ".navigation-item";
+var OUTLINE_TEXT_SELECTOR = ".navigation-item-content";
 
 function jumpToOutlineHeading({ headingText, occurrence }) {
   const items = [...document.querySelectorAll(OUTLINE_ITEM_SELECTOR)];

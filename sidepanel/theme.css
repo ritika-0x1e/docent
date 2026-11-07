@@ -100,7 +100,7 @@ button.icon:hover:not(:disabled) {
 
 .thread-row {
   margin: -2px -4px 10px;
-  padding: 6px 6px 6px 10px;
+  padding: 6px 8px 6px 10px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface-2);
@@ -703,4 +703,102 @@ button.toggle.pressed {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+/* Selected text attached to a question: a short quote that reads as a link; clicking it highlights
+   the text on the page. Above the composer while waiting, inside the bubble once sent. */
+.chat-quote {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  padding: 6px 4px 6px 10px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 10px 10px 0;
+  background: var(--accent-soft);
+  font-size: 12px;
+}
+
+.quote-label {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.quote-link {
+  display: inline;
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 12px;
+  font-style: italic;
+  font-weight: 500;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quote-link:hover:not(:disabled) {
+  border: 0;
+  background: none;
+  text-decoration-color: currentColor;
+}
+
+.chat-quote .quote-link {
+  flex: 1;
+}
+
+.quote-remove {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+}
+
+.msg.user .quote-link {
+  display: block;
+  max-width: 100%;
+  margin-bottom: 3px;
+  color: color-mix(in srgb, var(--accent-fg) 85%, transparent);
+  text-decoration-color: color-mix(in srgb, var(--accent-fg) 45%, transparent);
+}
+
+.quote-link.active {
+  font-weight: 650;
+  text-decoration-color: currentColor;
+}
+
+.quote-link.plain {
+  cursor: default;
+  text-decoration: none;
+}
+
+/* Delete thread's confirm state ("Delete?"): a red pill that fits its text and looks the same
+   hovered or not. The generic icon-button rules above (30px wide, no border on hover) used to win
+   over it, so the red outline vanished on hover and the text touched the edge. */
+button.icon.danger,
+button.icon.danger:hover:not(:disabled),
+button.icon.danger:focus-visible {
+  width: auto;
+  gap: 5px;
+  padding: 0 11px 0 9px;
+  border: 1px solid var(--error-border);
+  border-radius: 999px;
+  background: var(--error-bg);
+  color: var(--error-border);
+  font-weight: 600;
+}
+
+button.icon.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error-border) 18%, var(--error-bg));
+}
+
+button.icon.danger .small {
+  font-size: 12px;
 }

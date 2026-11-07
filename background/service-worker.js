@@ -21,6 +21,7 @@ importScripts(
   "../lib/spelling.js",
   "../lib/web-search.js",
   "../lib/links.js",
+  "../lib/explain-guard.js",
   "citation-styles.js",
   "vendor/idb.js",
   "sectioning.js",
@@ -418,6 +419,8 @@ const panelHandlers = {
     crawls.get(threadId)?.abort();
     return { ok: true };
   },
+  // The page's selection and its paragraph (a quote dropped onto the chat looks up its context here).
+  "panel-selection": async ({ tabId }) => ({ ok: true, ...(await pageSelection(tabId)) }),
   // Clear chat: the thread's conversation goes; its pages and scans stay. Not while it's answering.
   "panel-clear-chat": async ({ threadId }) => {
     if ([...liveChats.values()].some((live) => live.threadId === threadId)) return { ok: false, error: "Wait for the answer to finish, or stop it, first." };
@@ -558,12 +561,12 @@ chrome.runtime.onConnect.addListener((port) => {
       return;
     }
     if (message?.type !== "ask") return;
-    const { chatId, tabId, threadId, question, force } = message;
+    const { chatId, tabId, threadId, question, force, quote } = message;
     const live = { threadId, question, text: "", mode: null, status: "Finding sources…", checking: false, force: Boolean(force), controller: new AbortController(), watchers: new Set([post]) };
     liveChats.set(chatId, live);
     try {
       const result = await answerQuestion(
-        { tabId, threadId, question, force: Boolean(force) },
+        { tabId, threadId, question, force: Boolean(force), quote: quote?.text ? quote : null },
         {
           signal: live.controller.signal,
           onSources: (info) => {

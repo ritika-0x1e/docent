@@ -119,6 +119,17 @@ Revised approach:
   - Footnote markers after punctuation ("…[28]") are stripped from the sources, because models copy them as citations.
   - **Hallucination control (2026-11-07, user):** a local relevance gate before the call (best section score < 0.2: "not covered", the model isn't asked, with Ask anyway), and a local grounding check after it (sentences and numbers not found in the sources are marked; an answer with none of it in the sources is shown as not covered). Details: `phase-6-chat.md`.
 - Selection-scoped mode: if the user has text selected on the page, skip retrieval entirely and answer from just that selection — cheaper and more precise for "explain this specific part" questions.
+  - **Explain mode (2026-11-07, user).** With text selected or attached as a quote, the model may use general knowledge to explain it: define a word, unpack a sentence, give background. It also gets the paragraph around the selection. Questions without a selection stay page-only.
+  - **Guards, so a selection can't turn the panel into a general chatbot** (`lib/explain-guard.js`). They're decided by meaning, not by lists of phrasings, so a new way of asking still works (user, 2026-11-07):
+    1. **Before the call, only obvious misses are refused.** A question's leftover words (after grammar words and words from the selection) are refused only if they're far from the selection (< 0.15) *and* from a few example "help me understand" requests (< 0.2).
+    2. **The model is told** to explain only this text and decline anything else.
+    3. **After the call, the answer must be about the selection, or it's hidden.** The whole answer must score ≥ 0.25, and at least half its sentences ≥ 0.2. This is the real backstop.
+    4. **Explanations have a short output cap.**
+    - **Measurements:**
+      - Ways of asking scored 0.28–0.73 against the examples, and other tasks 0.11–0.36. They overlap, so step 1 alone can't separate them.
+      - Answers separate cleanly: on-topic 0.47–0.85, off-topic ≤ 0.10. On-topic sentences scored 0.52–0.87 (a short verdict opener 0.14), off-topic ones ≤ 0.16.
+    - **Unseen phrasings:** all 14 ways of asking passed, and 5 of 10 tasks were stopped before the model. Of the 5 that got through, the model declined or its answer was hidden for all but one. That one, a recommendation, stayed on Genesis instead, which is harmless.
+  - **Quotes:** dragging selected text onto the chat, or pressing Ctrl+Esc on the page, attaches it above the box as a short quote. Once sent, it's a link in the question bubble that highlights the text on the page.
 - Context budget is naturally bounded by `k`, not by how many pages are linked in a thread — so threads can grow without needing an explicit pruning scheme.
 - **Retrieval for chat (2026-11-07, from the user's testing):**
   - **Blended ranking.** The plain top 4 plus the top 4 after centring (the thread's mean chunk vector taken away from the question and the chunks), so on a page that's all about one topic the distinctive words still count. Usually 4–6 sections. The relevance gate keeps plain cosine scores.

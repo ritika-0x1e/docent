@@ -149,7 +149,11 @@ Some pages are handled differently:
 - Type in the box at the bottom and press **Enter** (Shift+Enter adds a new line). The answer streams in; **■** stops it and keeps what was written.
 - **Citations:** click **[2]** to highlight the supporting sentence on the page, and click again to clear it. **Esc** on the page, your next question, or closing the panel also clears it. If the source is on another page in the thread, that page is opened (or switched to) and highlighted there.
 - **Sources (n)** under an answer folds out the cards for each source: page, section, snippet and the same show/open action.
-- **Selection mode:** select text on the page, then ask (for example "explain this"). The answer is based only on your selection, and **[1]** highlights it again.
+- **Explain selected text:** select text on the page, then ask, for example "explain this in simple words" or "what does this word mean?". With a selection, the answer can use general knowledge to explain it (meanings, background), shown as "From your selection · explained".
+  - Questions have to be about the selection; anything else is politely refused.
+  - To attach a selection without pasting it, **drag it onto the chat**, or press **Ctrl+Esc** on the page (pages the panel has read; not on Windows, where Ctrl+Esc opens Start). It appears above the box as a short quote.
+  - In your sent question, the quote is a link: click it to highlight that text on the page.
+  - This works in **Google Docs** too: selecting text there and Ctrl+Esc both work. A Doc can't be highlighted, so its quotes stay plain text.
 - **When the page doesn't cover it:** you'll see "The sources don't cover this." If no part of the page was close to your question, the model wasn't asked at all. Two buttons may appear:
   - **Ask anyway** sends it to the model regardless.
   - **Search the web** opens a search tab for the question.

@@ -7,10 +7,10 @@
 // highlight per palette colour: background/citation-styles.js.
 // Plan: docs/phased-implementation-plan/phase-7-citations.md.
 
-const CITE_COLORS = 6; // must match the palette in background/citation-styles.js
-const FLASH_MS = 2000;
-let lastColor = -1;
-let flashTimer = null;
+var CITE_COLORS = 6; // must match the palette in background/citation-styles.js
+var FLASH_MS = 2000;
+var lastColor = -1;
+var flashTimer = null;
 
 function citationHighlightNames() {
   const names = [];
@@ -117,14 +117,16 @@ function flashSection(blocks) {
 }
 
 // Esc on the page clears the citation, and tells the panel so its button reads "Show on page" again.
-// Listens only; the key still reaches the page.
-if (!globalThis.__summarizerEscListener) {
-  globalThis.__summarizerEscListener = true;
-  document.addEventListener(
-    "keydown",
-    (event) => {
-      if (event.key === "Escape" && clearCitation()) chrome.runtime.sendMessage({ type: "citation-cleared" }).catch(() => {});
-    },
-    true
-  );
+// Listens only; the key still reaches the page. Each load of this script replaces the previous
+// load's listener (after an extension reload the old one is cut off).
+function onCitationEsc(event) {
+  if (event.key !== "Escape" || !clearCitation()) return;
+  try {
+    if (chrome.runtime?.id) chrome.runtime.sendMessage({ type: "citation-cleared" }).catch(() => {});
+  } catch {
+    /* cut off */
+  }
 }
+if (globalThis.__summarizerEscHandler) document.removeEventListener("keydown", globalThis.__summarizerEscHandler, true);
+globalThis.__summarizerEscHandler = onCitationEsc;
+document.addEventListener("keydown", onCitationEsc, true);

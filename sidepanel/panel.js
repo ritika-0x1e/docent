@@ -13,6 +13,7 @@ const dom = {
   readingView: document.getElementById("reading-view"),
   chatLog: document.getElementById("chat-log"),
   chatForm: document.getElementById("chat-form"),
+  chatQuote: document.getElementById("chat-quote"),
   chatInput: document.getElementById("chat-input"),
   chatSend: document.getElementById("chat-send"),
   chatStop: document.getElementById("chat-stop"),
@@ -55,6 +56,7 @@ const handlers = {
   onDeleteThread: () => onDeleteThread(),
   onAskAnyway: (question) => askQuestion(question, { force: true }),
   onCitation: (key, source, action) => toggleCitation(key, source, action),
+  onRemoveQuote: () => ((quote = null), render()),
   onOpenPicklist: () => (picklist?.tabId === state.activeTabId ? closePicklist() : openPicklist()),
   isPicklistOpen: () => picklist?.tabId === state.activeTabId,
   onWebSearch: (query) =>
@@ -85,7 +87,7 @@ function render() {
       dom.readingView.__rendered = null; // the sections render again once it closes
     }
   } else renderReadingView(state.activeTabId, tab, dom.readingView, handlers, threadView(state).mode);
-  renderChat(state, { pending, failed, activeCitation, confirmingClear }, dom, handlers);
+  renderChat(state, { pending, failed, activeCitation, confirmingClear, quote }, dom, handlers);
 }
 
 function showToast(text) {
@@ -298,14 +300,40 @@ async function toggleCitation(key, source, action) {
   render();
 }
 
+// Selected text attached to the next question: {tabId, text, context} or null. It replaces the
+// page's live selection for that question (explain mode), then clears.
+let quote = null;
+
+function attachQuote(tabId, text, context = "") {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (!clean || tabId !== state.activeTabId) return;
+  quote = { tabId, text: clean, context };
+  render();
+  dom.chatInput.focus();
+}
+
+// A drop onto the chat: the dragged selection becomes a quote instead of text in the box. Its
+// paragraph comes from the page when the selection is still there.
+async function onQuoteDrop(event) {
+  const text = event.dataTransfer?.getData("text/plain");
+  if (!text?.trim()) return;
+  event.preventDefault();
+  const tabId = state.activeTabId;
+  const live = await chrome.runtime.sendMessage({ type: "panel-selection", tabId }).catch(() => null);
+  const same = live?.text && live.text.replace(/\s+/g, " ").trim() === text.replace(/\s+/g, " ").trim();
+  attachQuote(tabId, text, same ? live.context : "");
+}
+
 // force: "Ask anyway" on an answer the relevance gate gave (the model wasn't asked).
 function askQuestion(question, { force = false } = {}) {
   const tab = activeTab(state);
   if (!question || pending || !tab?.threadId) return;
   failed = null;
   clearCitation(); // a new question clears the last answer's highlight (decision 2)
-  pending = { chatId: crypto.randomUUID(), tabId: state.activeTabId, threadId: tab.threadId, question, force, text: "", mode: null, status: "Finding sources…", error: null };
-  chatChannel().postMessage({ type: "ask", chatId: pending.chatId, tabId: pending.tabId, threadId: pending.threadId, question, force });
+  const attached = !force && quote?.tabId === state.activeTabId ? quote : null;
+  pending = { chatId: crypto.randomUUID(), tabId: state.activeTabId, threadId: tab.threadId, question, force, text: "", mode: null, status: "Finding sources…", error: null, quote: attached && { text: attached.text, pageUrl: tab.url } };
+  chatChannel().postMessage({ type: "ask", chatId: pending.chatId, tabId: pending.tabId, threadId: pending.threadId, question, force, quote: attached && { text: attached.text, context: attached.context } });
+  if (attached) quote = null;
   if (force) return render();
   dom.chatInput.value = "";
   autoGrow();
@@ -509,9 +537,12 @@ async function init() {
   chrome.tabs.onRemoved.addListener((tabId) => dispatch({ type: "tab-closed", tabId }));
 
   // Clicking the toolbar icon grants activeTab, which makes the tab's title readable.
-  chrome.runtime.onMessage.addListener((message) => {
+  chrome.runtime.onMessage.addListener((message, sender) => {
     if (message?.type === "action-clicked") refreshTabInfo(message.tabId);
-    else if (message?.type === "crawl-progress") {
+    else if (message?.type === "selection-to-chat") {
+      // Ctrl+Esc on the page (content/bootstrap.js): only from the tab the panel is showing.
+      if (sender?.tab?.id === state.activeTabId) attachQuote(sender.tab.id, message.text, message.context);
+    } else if (message?.type === "crawl-progress") {
       if (picklist?.threadId === message.threadId) picklist.view.setProgress(message);
       if (message.stage === "added" && message.thread) dispatch({ type: "thread-updated", thread: message.thread });
     } else if (message?.type === "citation-cleared") {
@@ -555,6 +586,11 @@ async function init() {
   dom.chatInput.addEventListener("input", autoGrow);
   dom.chatStop.addEventListener("click", stopAnswer);
   dom.chatClear.addEventListener("click", onClearChat);
+  // Dragging selected text onto the chat attaches it as a quote (not pasted into the box).
+  const chatArea = document.getElementById("chat-area");
+  chatArea.addEventListener("dragover", (e) => e.dataTransfer?.types.includes("text/plain") && e.preventDefault());
+  chatArea.addEventListener("drop", onQuoteDrop);
+  dom.chatInput.addEventListener("drop", onQuoteDrop);
   setIcon(dom.chatSend, "send", "Send (Enter)");
   setIcon(dom.chatStop, "stop", "Stop answering");
   dom.settingsToggle.addEventListener("click", () => toggleSettings());

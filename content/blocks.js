@@ -5,8 +5,8 @@
 // h1 is absent by default: Readability renames article h1s to h2 (the title comes as article.title).
 // The Google Docs export passes its own set, since there h1 is a real "Heading 1".
 // h5/h6 are treated as text — too fine-grained to be worth a section boundary.
-const DEFAULT_HEADING_TAGS = ["H2", "H3", "H4"];
-const BLOCK_SELECTOR = "h1, h2, h3, h4, h5, h6, p, pre, blockquote, table, figcaption, ul, ol, dl";
+var DEFAULT_HEADING_TAGS = ["H2", "H3", "H4"];
+var BLOCK_SELECTOR = "h1, h2, h3, h4, h5, h6, p, pre, blockquote, table, figcaption, ul, ol, dl";
 
 // Readability turns any <div> (and old <font> wrappers) without block children into a <p>, and it
 // doesn't count headings as block children. So a <p> can end up holding real blocks:
@@ -17,7 +17,7 @@ const BLOCK_SELECTOR = "h1, h2, h3, h4, h5, h6, p, pre, blockquote, table, figca
 // The outer <p> would win and swallow everything, so unwrap it. Loose text between the inner blocks
 // (e.g. the essay's date) is kept, wrapped in its own <p>.
 // contentEl is Readability's detached clone or a parsed export, never the live page.
-const INNER_BLOCK_SELECTOR = "h1, h2, h3, h4, h5, h6, p, pre, blockquote, table, ul, ol, dl";
+var INNER_BLOCK_SELECTOR = "h1, h2, h3, h4, h5, h6, p, pre, blockquote, table, ul, ol, dl";
 
 function unwrapBlockParagraphs(contentEl) {
   const doc = contentEl.ownerDocument;
@@ -50,7 +50,7 @@ function unwrapBlockParagraphs(contentEl) {
 // Lincoln's second inaugural came out as one 1,058-word block), and long lists of <p>-holding
 // items do the same. A real quote, data table or plain list keeps most text as its own and stays
 // one block. Text in a wrapper outside its nested blocks is dropped, at most 1 - WRAPPER_SHARE.
-const WRAPPER_SHARE = 0.8;
+var WRAPPER_SHARE = 0.8;
 
 function holdsBlocks(el) {
   const nested = [...el.querySelectorAll(BLOCK_SELECTOR)].filter((d) => d.parentElement.closest(BLOCK_SELECTOR) === el);
@@ -66,12 +66,12 @@ function holdsBlocks(el) {
 // boundary of these elements instead. Anchoring still needs the page's own text, which has no space
 // there either, so a block whose spaced text differs keeps the plain one as anchorText (as Markdown
 // blocks already do).
-const SPACED_TAGS = new Set([
+var SPACED_TAGS = new Set([
   "ADDRESS", "ARTICLE", "ASIDE", "BLOCKQUOTE", "BR", "CAPTION", "DD", "DIV", "DL", "DT", "FIGCAPTION", "FIGURE",
   "FOOTER", "H1", "H2", "H3", "H4", "H5", "H6", "HEADER", "HR", "LI", "OL", "P", "PRE", "SECTION", "TABLE",
   "TBODY", "TD", "TFOOT", "TH", "THEAD", "TR", "UL",
 ]);
-const UNREAD_TAGS = new Set(["STYLE", "SCRIPT", "NOSCRIPT", "TEMPLATE"]);
+var UNREAD_TAGS = new Set(["STYLE", "SCRIPT", "NOSCRIPT", "TEMPLATE"]);
 
 function readableText(node) {
   let out = "";
