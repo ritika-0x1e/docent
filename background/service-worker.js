@@ -13,12 +13,18 @@ importScripts(
   "../lib/section-prompt.js",
   "../lib/chunk.js",
   "../lib/retrieval.js",
+  "../lib/threads.js",
+  "../lib/gemini-ladder.js",
+  "../lib/chat-prompt.js",
+  "../lib/grounding.js",
   "vendor/idb.js",
   "sectioning.js",
   "llm.js",
   "embedder.js",
   "store.js",
-  "retriever.js"
+  "tab-threads.js",
+  "retriever.js",
+  "chat.js"
 );
 
 const DEBUG_HIGHLIGHT_CSS = "::highlight(summarizer-debug) { background-color: #ffe066; color: #000; }";
@@ -225,7 +231,20 @@ globalThis.listCorpora = async () => {
 
 globalThis.clearCorpora = async () => {
   await clearStoredCorpora();
-  console.log("[Summarizer/C] all stored corpora deleted");
+  console.log("[Summarizer/C] all stored corpora and threads deleted");
+};
+
+globalThis.listThreads = async () => {
+  const threads = await listStoredThreads();
+  console.table(
+    threads.map((t) => ({ id: t.id, title: t.title, pages: t.pages.length, updated: new Date(t.updatedAt).toLocaleString(), urls: t.pages.map((p) => p.url).join("  ") }))
+  );
+  return threads;
+};
+
+globalThis.clearThreads = async () => {
+  for (const t of await listStoredThreads()) await deleteThread(t.id);
+  console.log("[Summarizer/G1] all threads and their corpora deleted");
 };
 
 globalThis.setGeminiKey = async (key) => {
@@ -243,8 +262,9 @@ globalThis.embed = async (texts) => {
   return vectors;
 };
 
-// The panel's requests about a scanned tab (phase 4: reading view + the temporary find-sections box,
-// decision 2 — deleted when chat (I3) lands). Content scripts never send these.
+// The panel's requests about a scanned tab (reading view, thread links). Chat has its own port
+// (bottom of this file); phase 4's temporary find-sections box was removed with it. Content scripts
+// never send these.
 const panelHandlers = {
   // Show a section on the page: live highlight when anchored, outline jump on Google Docs.
   "panel-show-section": async ({ tabId, index }) => {
@@ -265,27 +285,15 @@ const panelHandlers = {
     running?.abort();
     return { ok: true, stopped: Boolean(running) };
   },
-  // Top-5 sections for a query, each with its best chunk's text as the snippet.
-  "panel-find": async ({ tabId, query: text }) => {
-    const scan = await getLastScan(tabId);
-    if (!scan?.corpusId) return { ok: false, error: "Nothing stored for this tab yet. Scan it first." };
-    const { hits, staleCorpora } = await retrieve([scan.corpusId], text, 5);
-    if (staleCorpora.length) return { ok: false, error: "This scan used an older embedding model. Scan again." };
-    return {
-      ok: true,
-      hits: hits.map((h) => {
-        const chunk = chunkSection(h.section)[h.bestChunkIndex]?.text ?? h.section.text;
-        return {
-          index: h.section.order,
-          score: h.score,
-          heading: h.section.heading,
-          headingSource: h.section.headingSource,
-          headingPath: h.section.headingPath,
-          snippet: chunk.slice(chunk.lastIndexOf("\n") + 1), // drop the heading-path prefix line
-          action: h.section.blocks.some((b) => b.anchored) ? "highlight" : h.section.jump ? "jump" : null,
-        };
-      }),
-    };
+  // G2 (revised 2026-11-06): the thread this tab is in or continues, and the one it can reattach.
+  "panel-tab-thread": async ({ tabId }) => ({ ok: true, ...(await tabThread(tabId)) }),
+  "panel-detach-thread": async ({ tabId }) => ({ ok: true, ...(await detachTabThread(tabId)) }),
+  "panel-reattach-thread": async ({ tabId }) => ({ ok: true, ...(await reattachTabThread(tabId)) }),
+  // Decision 3: removes the thread and every corpus it points to; tabs linked to it start fresh.
+  "panel-delete-thread": async ({ threadId }) => {
+    const ok = await deleteThread(threadId);
+    await forgetThreadLinks(threadId);
+    return { ok };
   },
 };
 
@@ -370,12 +378,53 @@ chrome.runtime.onConnect.addListener((port) => {
 
   port.onMessage.addListener(async (message) => {
     if (message?.type !== "start") return;
-    const { tabId, scanId, force = false } = message;
+    const { tabId, scanId, force = false, threadId = null, rescan = false } = message;
     try {
-      await runScan(tabId, { force }, (progress) => post({ tabId, scanId, ...progress }));
+      await scanIntoThread(tabId, { threadId, force, rescan }, (progress) => post({ tabId, scanId, ...progress }));
     } catch (err) {
       console.error("[Summarizer] scan failed:", err);
       post({ tabId, scanId, stage: "error", message: String(err?.message ?? err) });
+    }
+  });
+});
+
+// Phase 6 chat (I3): the panel asks over a "chat" port and gets the answer streamed back.
+//   panel → {type: "ask", chatId, tabId, threadId, question, force} | {type: "stop", chatId}
+//   background → {chatId, type: "sources", mode, count} | {chatId, type: "delta", text} | {chatId, type: "checking"}
+//              | {chatId, type: "done", thread, message} | {chatId, type: "error", error}
+// Closing the panel aborts the answer in progress; nothing is saved for it.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "chat") return;
+  const running = new Map(); // chatId → AbortController
+  let connected = true;
+  port.onDisconnect.addListener(() => {
+    connected = false;
+    for (const controller of running.values()) controller.abort();
+  });
+  const post = (message) => connected && port.postMessage(message);
+
+  port.onMessage.addListener(async (message) => {
+    if (message?.type === "stop") return running.get(message.chatId)?.abort();
+    if (message?.type !== "ask") return;
+    const { chatId, tabId, threadId, question, force } = message;
+    const controller = new AbortController();
+    running.set(chatId, controller);
+    try {
+      const result = await answerQuestion(
+        { tabId, threadId, question, force: Boolean(force) },
+        {
+          signal: controller.signal,
+          onSources: (info) => post({ chatId, type: "sources", ...info }),
+          onDelta: (text) => post({ chatId, type: "delta", text }),
+          onChecking: () => post({ chatId, type: "checking" }),
+        }
+      );
+      post({ chatId, type: "done", thread: result.thread, message: result.message });
+    } catch (err) {
+      if (!controller.signal.aborted) console.error("[Summarizer] chat failed:", err);
+      post({ chatId, type: "error", error: controller.signal.aborted ? "Stopped before any answer arrived." : String(err?.message ?? err) });
+    } finally {
+      running.delete(chatId);
     }
   });
 });

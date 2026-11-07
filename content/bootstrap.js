@@ -82,6 +82,9 @@ async function handleScan(message) {
     const handlers = {
       scan: handleScan,
       "highlight-blocks": (message) => debugHighlight(message.blockIds),
+      "reanchor-blocks": (message) => ({ ok: true, anchored: reanchorBlocks(message.blocks) }),
+      // E3: the text selected on the page when a question is sent ("" if none).
+      "get-selection": () => ({ ok: true, text: normalizeText(String(window.getSelection() ?? "")) }),
       "jump-to-outline-heading": (message) => jumpToOutlineHeading(message.jump),
       "clear-highlight": () => (clearDebugHighlight(), { ok: true }),
     };

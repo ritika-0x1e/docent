@@ -70,7 +70,8 @@ async function isAlreadyInjected(tabId) {
   return injection?.result === true;
 }
 
-async function attemptScan(tabId, { force = false } = {}) {
+// Injects the content scripts unless they're already there; { blocked: false } once they answer.
+async function ensureInjected(tabId) {
   let alreadyInjected;
   try {
     alreadyInjected = await isAlreadyInjected(tabId);
@@ -90,7 +91,12 @@ async function attemptScan(tabId, { force = false } = {}) {
     const result = await handshake.promise;
     if (result.blocked) return result;
   }
+  return { blocked: false };
+}
 
+async function attemptScan(tabId, { force = false } = {}) {
+  const injected = await ensureInjected(tabId);
+  if (injected.blocked) return injected;
   const response = await chrome.tabs.sendMessage(tabId, { type: "scan", force });
   return { blocked: false, response };
 }
@@ -166,4 +172,96 @@ async function runScan(tabId, { force = false } = {}, onProgress = () => {}) {
     detail: { source: response.source, title: response.article.title, storeError },
   });
   return result;
+}
+
+/**
+ * G3 / H2: Start scan into the tab's thread (null = a new thread), per the §3.11 matrix.
+ *   new-thread → full scan, then a thread is created with this page
+ *   append     → full scan, then the page is added to the thread
+ *   cache-hit  → no scan: the saved corpus is loaded and its anchors rebuilt in the tab (H3)
+ *   rescan     → (decision 2) full scan, and the page's corpus in the thread is replaced
+ * Progress goes through onProgress like runScan's; the final "done" also carries the thread.
+ */
+async function scanIntoThread(tabId, { threadId = null, force = false, rescan = false } = {}, onProgress = () => {}) {
+  const thread = threadId ? await getThread(threadId) : null;
+  if (threadId && !thread) {
+    onProgress({ stage: "error", message: "That thread was deleted. Close it (×) and scan again to start a new one." });
+    return null;
+  }
+
+  const url = (await chrome.tabs.get(tabId)).url;
+  const action = scanAction(thread, url); // url is undefined without access: the scan reports that
+  const page = findPage(thread, url);
+  if (action === "cache-hit" && !rescan) {
+    const stored = await getCorpus(page.corpusRef);
+    if (stored) return loadSavedScan(tabId, thread, stored, onProgress);
+    // Its corpus is gone (e.g. clearCorpora): scan again into the same place.
+  }
+
+  let done = null;
+  const result = await runScan(tabId, { force }, (progress) => (progress.stage === "done" ? (done = progress) : onProgress(progress)));
+  if (!done) return result; // needs-force, blocked, source-error: already reported
+
+  let saved = thread;
+  if (done.corpusId) {
+    const tabUrl = (await chrome.tabs.get(tabId)).url;
+    const entry = { url: tabUrl, title: done.detail.title, corpusRef: done.corpusId };
+    const now = Date.now();
+    if (!thread) saved = await saveThread(newThread({ id: crypto.randomUUID(), page: entry, now }));
+    // Applied to the thread as stored now: chat may have added messages while this page scanned.
+    else saved = await updateThread(thread.id, (fresh) => (page ? replacePage(fresh, page.url, entry, now) : withPage(fresh, entry, now)));
+    if (!saved) {
+      onProgress({ stage: "error", message: "That thread was deleted during the scan. Scan again to start a new one." });
+      await deleteCorpus(done.corpusId).catch(() => {});
+      return result;
+    }
+    await setTabThread(tabId, { threadId: saved.id });
+    if (page && page.corpusRef !== done.corpusId) await deleteCorpus(page.corpusRef).catch(() => {});
+    await chrome.storage.session.set({ [`scan:${tabId}`]: { ...(await getLastScanRecord(tabId)), threadId: saved.id } });
+  }
+  onProgress({ ...done, threadId: saved?.id ?? null, thread: saved, cacheHit: false });
+  return result;
+}
+
+// H3: the page is already in the thread. Rebuild its live ranges from the stored anchors (Google
+// Docs has none; jump works without), then hand the saved sections to the panel.
+async function loadSavedScan(tabId, thread, { corpus, sections }, onProgress) {
+  onProgress({ stage: "loading" });
+  const injected = await ensureInjected(tabId);
+  if (injected.blocked) {
+    onProgress(scanOutcomeStage(injected));
+    return null;
+  }
+
+  let live = sections;
+  if (corpus.source !== "gdocs") {
+    const blocks = sections.flatMap((s) => s.blocks).filter((b) => b.anchor);
+    const reply = await chrome.tabs.sendMessage(tabId, { type: "reanchor-blocks", blocks });
+    const anchored = new Set(reply?.anchored ?? []);
+    live = sections.map((s) => ({ ...s, blocks: s.blocks.map((b) => ({ ...b, anchored: anchored.has(b.id) })) }));
+    const total = blocks.length;
+    console.log(`[Summarizer/G3] cache hit: ${corpus.title}; re-anchored ${anchored.size}/${total} blocks, nothing embedded`);
+  } else {
+    console.log(`[Summarizer/G3] cache hit: ${corpus.title} (Google Doc, jump only), nothing embedded`);
+  }
+
+  await chrome.storage.session.set({
+    [`scan:${tabId}`]: { url: corpus.url, source: corpus.source, corpusId: corpus.corpusId, threadId: thread.id, sections: live },
+  });
+  await setTabThread(tabId, { threadId: thread.id });
+  onProgress({
+    stage: "done",
+    sections: live,
+    corpusId: corpus.corpusId,
+    threadId: thread.id,
+    thread,
+    cacheHit: true,
+    detail: { source: corpus.source, title: corpus.title, storeError: null },
+  });
+  return { cacheHit: true, sections: live };
+}
+
+async function getLastScanRecord(tabId) {
+  const key = `scan:${tabId}`;
+  return (await chrome.storage.session.get(key))[key] ?? {};
 }

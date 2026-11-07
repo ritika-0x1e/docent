@@ -60,6 +60,31 @@ function holdsBlocks(el) {
   return own > 0 && inNested >= WRAPPER_SHARE * own;
 }
 
+// textContent runs neighbouring cells, captions and list items together with no space between them
+// ("Washington, D.C." + "Capital city…" in an infobox became "Washington, D.C.Capital city…"), and
+// that glued text reached headings, summaries and embeddings. readableText() puts a space at each
+// boundary of these elements instead. Anchoring still needs the page's own text, which has no space
+// there either, so a block whose spaced text differs keeps the plain one as anchorText (as Markdown
+// blocks already do).
+const SPACED_TAGS = new Set([
+  "ADDRESS", "ARTICLE", "ASIDE", "BLOCKQUOTE", "BR", "CAPTION", "DD", "DIV", "DL", "DT", "FIGCAPTION", "FIGURE",
+  "FOOTER", "H1", "H2", "H3", "H4", "H5", "H6", "HEADER", "HR", "LI", "OL", "P", "PRE", "SECTION", "TABLE",
+  "TBODY", "TD", "TFOOT", "TH", "THEAD", "TR", "UL",
+]);
+const UNREAD_TAGS = new Set(["STYLE", "SCRIPT", "NOSCRIPT", "TEMPLATE"]);
+
+function readableText(node) {
+  let out = "";
+  for (const child of node.childNodes) {
+    if (child.nodeType === 3) out += child.data;
+    else if (child.nodeType === 1 && !UNREAD_TAGS.has(child.tagName)) {
+      const spaced = SPACED_TAGS.has(child.tagName);
+      out += spaced ? ` ${readableText(child)} ` : readableText(child);
+    }
+  }
+  return out;
+}
+
 function parseBlocks(contentEl, { headingTags = DEFAULT_HEADING_TAGS } = {}) {
   if (!contentEl) return [];
   unwrapBlockParagraphs(contentEl);
@@ -86,8 +111,9 @@ function parseBlocks(contentEl, { headingTags = DEFAULT_HEADING_TAGS } = {}) {
     }
     if (inside) continue;
 
-    const text = normalizeText(el.textContent || "");
-    if (!text) continue;
+    const plain = normalizeText(el.textContent || "");
+    if (!plain) continue;
+    const text = normalizeText(readableText(el)) || plain;
 
     const isHeading = headings.has(el.tagName);
     blocks.push({
@@ -95,6 +121,7 @@ function parseBlocks(contentEl, { headingTags = DEFAULT_HEADING_TAGS } = {}) {
       type: isHeading ? "heading" : "text",
       ...(isHeading && { level: Number(el.tagName[1]) }),
       text,
+      ...(text !== plain && { anchorText: plain }),
       wordCount: countWords(text),
     });
   }

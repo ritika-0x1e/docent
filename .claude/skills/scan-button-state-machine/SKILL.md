@@ -14,6 +14,8 @@ On open, show, without running anything:
 - A thread picker: recent threads by title + a "start new thread" option
 - The "Start scan" button
 
+> **Revised 2026-11-06 (user): no thread picker.** "Thread selected" below means the tab's own thread link: the thread it continues (a link followed from a thread page, same tab or a new tab opened from it) or the one its page is saved in. There's no recent-threads list. The panel shows "Continuing <name>" with ×, the thread name as a heading once the page is in it, or nothing for a new thread. Reattach appears only after ×. See master-spec §3.11 and `background/tab-threads.js`.
+
 ## State matrix (H2)
 
 | Thread selected? | Page already in thread.pages? | On "Start scan" press |
@@ -33,4 +35,4 @@ A fourth path exists independent of the scan button: entering an existing thread
 ## Non-goals
 
 - No auto-scan on panel open, ever, regardless of whether a thread is selected.
-- No re-scan-on-every-question behavior — a page's corpus, once produced, is reused for the rest of the session unless the user explicitly triggers a rescan (rescan-on-demand is not yet in the sub-feature list; flag before adding it).
+- No re-scan-on-every-question behavior — a page's corpus, once produced, is reused unless the user explicitly presses **Rescan**. Rescan was approved on 2026-11-06 (phase 5, decision 2). It shows only on a tab that is showing the selected thread's scan, and it replaces that page's corpus in the thread.

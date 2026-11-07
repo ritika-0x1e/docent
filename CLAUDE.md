@@ -17,7 +17,7 @@ Do not start a sub-feature not listed there without checking in first. If a sub-
 
 ## Current phase
 
-**Phase A (extraction & classification): done and tested. Phases 2–4 (B sectioning, A5 special sources, C embeddings/retrieval, side panel shell): done; the combined run passed on 2026-11-06** (item 11's headingless retrieval accepted as a known limitation, see `phase-4-side-panel-shell.md`). Next: phase 5 (G1–G3, H3, H4: thread persistence and the scan-button matrix, spec §6), only when the user asks for it; testing is per-phase again from here. Per-phase plans are in `docs/phased-implementation-plan/`. Before starting any phase, check that plan's **checkpoints** and its "decisions needing sign-off" section. Remind the user to run any checkpoint left unticked, or the combined run if it's still pending, before building further. Work sub-feature by sub-feature in the order given in `docs/master-spec.md` §6.
+**Phase A (extraction & classification): done and tested. Phases 2–4 (B sectioning, A5 special sources, C embeddings/retrieval, side panel shell): done; the combined run passed on 2026-11-06** (item 11's headingless retrieval accepted as a known limitation, see `phase-4-side-panel-shell.md`). **Phase 5 (threads, G1–G3, H3, H4): built and checked automatically on 2026-11-06** (`phase-5-threads.md`); the user's own check in the real side panel is still to do. **Phase 6 (chat, E1/E3/E4/I3): built 2026-11-07** (`phase-6-chat.md`). Checks with real Gemini answers are still to be run by the user, since the automated run has no real key. Next: phase 7 (F1–F3: citation highlighting), only when the user asks for it. Testing is per-phase. Per-phase plans are in `docs/phased-implementation-plan/`. Before starting any phase, check that plan's **checkpoints** and its "decisions needing sign-off" section. Remind the user to run any checkpoint left unticked, or the combined run if it's still pending, before building further. Work sub-feature by sub-feature in the order given in `docs/master-spec.md` §6.
 
 ## Tech stack (do not substitute without discussion)
 
@@ -28,7 +28,7 @@ Do not start a sub-feature not listed there without checking in first. If a sub-
 | Sectioning | Custom heuristics (heading split) + embedding-based centroid breakpoint detection for unstructured pages |
 | Embeddings | Transformers.js, `all-MiniLM-L6-v2`, quantized, run in a Web Worker hosted by an offscreen document (MV3 service workers can't spawn workers). Library + wasm vendored but not committed: `npm run vendor` fetches them at pinned versions after cloning (`workers/vendor/VENDORED.md`); model weights downloaded on first use and cached (spec §7.2) |
 | Vector storage | IndexedDB (raw cosine similarity, no external vector DB — page-scale doesn't need one) |
-| LLM | Gemini free tier via direct API calls from the background service worker. Headings/summaries (B3) use `gemini-3.5-flash-lite`, on demand, because full Flash is capped at 20 requests/day. Local Ollama (E5) is built for B3 as fallback or alternative. Chat's model is undecided until phase 6 (spec §3.6) |
+| LLM | Gemini free tier via direct API calls from the background service worker. Headings/summaries (B3) use `gemini-3.5-flash-lite`, on demand, because full Flash is capped at 20 requests/day. Chat (phase 6) walks a ladder of Flash models, then Flash-Lite, as each one's daily quota runs out, then local Ollama (spec §3.6). Local Ollama (E5) serves both B3 and chat as fallback or alternative |
 | Web search | Plain `fetch()` against DuckDuckGo's HTML endpoint, no API key; Brave Search API as a fallback path if DDG markup drifts |
 | Citation highlighting | CSS Custom Highlight API (`Highlight`, `CSS.highlights.set()`) — never DOM-mutating span wraps |
 | Language | JavaScript throughout (content scripts, background worker, side panel UI). No build-step framework required for v1 — keep it lightweight; only reach for a bundler if a library genuinely needs one. The plan for Transformers.js is to vendor its prebuilt ESM build and load it in a module worker, with no bundler; checkpoint CP-B2 confirms whether that works |
@@ -62,5 +62,4 @@ See `.claude/skills/` for project-specific skills (full instructions, authored f
 
 ## Out of scope for now
 
-- Ollama for chat (E5's chat part): wait for phase 6; only B3 uses Ollama so far (spec §3.6)
 - Anything beyond the top-20 link picklist UX — no infinite crawling, no autonomous agent-driven crawling ever (this was an explicit rejected design — see spec §3.3)

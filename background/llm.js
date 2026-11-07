@@ -80,8 +80,9 @@ async function callGemini(body, key, { model = GEMINI_LABEL_MODEL, signal } = {}
   }
 }
 
+// Opens an Ollama /api/chat request and returns the (ok) response, or throws a readable error.
 // Aborting (signal) closes the connection, and Ollama cancels the job when its client goes away.
-async function callOllama(body, { signal } = {}) {
+async function fetchOllama(body, { signal } = {}) {
   await installOllamaOriginRule(); // idempotent; session rules don't survive a browser restart
   let response;
   try {
@@ -96,6 +97,11 @@ async function callOllama(body, { signal } = {}) {
     const json = await response.json().catch(() => null);
     throw new Error(`Ollama HTTP ${response.status}: ${json?.error ?? "no details"}`);
   }
+  return response;
+}
+
+async function callOllama(body, { signal } = {}) {
+  const response = await fetchOllama(body, { signal });
   // Streamed reply: bytes keep arriving while the model works, so MV3 doesn't stop the service
   // worker for a fetch that seems stalled (it does after ~30s without a response).
   return ollamaToGeminiShape(joinOllamaStream(await response.text()));

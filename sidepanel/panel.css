@@ -33,6 +33,21 @@
   box-sizing: border-box;
 }
 
+/* Thin scrollbars everywhere (reading view, find results, settings), in the panel's own colours. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+*:hover {
+  scrollbar-color: var(--muted) transparent;
+}
+
+/* The hidden attribute must win over component display rules (button.icon, .thread-row are flex). */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   height: 100%;
@@ -119,19 +134,205 @@ button:disabled {
   word-break: break-word;
 }
 
+/* Split view (spec §4): sections on top, the conversation below, each scrolling on its own. */
 .reading-view {
-  flex: 1;
+  flex: 1 1 0;
+  min-height: 120px;
   overflow-y: auto;
   padding: 12px;
 }
 
 .chat-area {
-  padding: 12px;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 200px;
+  padding: 8px 12px 10px;
   border-top: 1px solid var(--border);
 }
 
-.chat-area .field-row {
-  margin-bottom: 4px;
+.chat-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 2px 8px;
+}
+
+.chat-empty {
+  padding: 8px 0;
+}
+
+.msg {
+  margin: 8px 0 12px;
+}
+
+.msg p {
+  margin: 0 0 6px;
+}
+
+.msg.user {
+  width: fit-content;
+  max-width: 85%;
+  margin-left: auto;
+  padding: 6px 10px;
+  border-radius: 12px 12px 4px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.msg.user p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.answer ul {
+  margin: 0 0 6px;
+  padding-left: 18px;
+}
+
+.answer li {
+  margin-bottom: 2px;
+}
+
+/* [n] citation chips inside an answer. */
+.cite {
+  height: auto;
+  margin: 0 1px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  vertical-align: 1px;
+}
+
+.cite:hover {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.typing {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.msg-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.msg-error {
+  padding: 6px 8px;
+  border: 1px solid var(--error-border);
+  border-radius: 6px;
+  background: var(--error-bg);
+  font-size: 13px;
+}
+
+/* Source cards under an answer, numbered like its [n] chips. */
+.sources {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.source {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.source-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.source-body {
+  min-width: 0;
+}
+
+.source-heading {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.source .snippet {
+  -webkit-line-clamp: 3;
+  margin: 2px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.source.flash {
+  animation: flash 1s ease-out;
+}
+
+@keyframes flash {
+  from {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+}
+
+.chat-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.chat-form textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 34px;
+  max-height: 120px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  resize: none;
+}
+
+.chat-form textarea:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.chat-form button {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-hint {
+  margin-top: 4px;
 }
 
 .muted {
@@ -272,34 +473,6 @@ details summary {
   font-size: 12px;
 }
 
-.find-results {
-  max-height: 40vh;
-  overflow-y: auto;
-}
-
-.hit {
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.hit-head {
-  display: flex;
-  gap: 6px;
-  align-items: baseline;
-  font-weight: 600;
-}
-
-.hit-head .text {
-  flex: 1;
-  min-width: 0;
-}
-
-.score {
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
-}
-
 .snippet {
   margin: 4px 0;
   font-size: 13px;
@@ -307,10 +480,6 @@ details summary {
   -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
   overflow: hidden;
-}
-
-.find-results .muted {
-  padding-top: 8px;
 }
 
 .gen-row {
@@ -321,7 +490,8 @@ details summary {
   margin-top: 8px;
 }
 
-select {
+/* Settings form only. */
+.settings select {
   font: inherit;
   width: 100%;
   margin: 4px 0 10px;
@@ -340,4 +510,275 @@ select {
 .settings code {
   font-size: 11px;
   word-break: break-all;
+}
+
+.thread-row {
+  position: relative;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -2px 0 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.thread-icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.thread-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-name.continued {
+  flex: 0 1 auto;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+/* Icon, name and count: one hover/focus target for the trail card below. */
+.thread-hover {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  border-radius: 6px;
+  outline: none;
+  cursor: default;
+}
+
+.thread-hover:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.thread-count {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.thread-hover:hover .thread-count,
+.thread-hover:focus-visible .thread-count {
+  color: var(--fg);
+}
+
+/* Trail card: pages joined by arrows, in the order they joined the thread. */
+.thread-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 10;
+  width: max-content;
+  min-width: 220px;
+  max-width: min(340px, calc(100vw - 32px));
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.25);
+  visibility: hidden;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 0.12s ease, transform 0.12s ease, visibility 0.12s;
+}
+
+.thread-hover:hover .thread-pop,
+.thread-hover:focus-visible .thread-pop {
+  visibility: visible;
+  opacity: 1;
+  transform: none;
+}
+
+.pop-head {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.trail {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trail-step {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  align-items: start;
+  gap: 8px;
+  padding: 4px 8px 4px 0;
+  border-radius: 6px;
+}
+
+.trail-dot {
+  width: 10px;
+  height: 10px;
+  margin: 4px 2px 0;
+  border: 2px solid var(--muted);
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.trail-label {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.trail-title {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.trail-tag {
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.trail-step.here .trail-dot {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.trail-step.here .trail-title {
+  font-weight: 600;
+}
+
+.trail-step.pending .trail-dot {
+  background: transparent;
+}
+
+.trail-step.pending .trail-tag {
+  color: var(--muted);
+}
+
+/* Arrow between two steps, centred under the dots. */
+.trail-arrow {
+  display: flex;
+  width: 14px;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.trail-arrow.pending {
+  opacity: 0.6;
+}
+
+.trail-arrow.pending svg {
+  stroke-dasharray: 2 3;
+}
+
+/* One height for the header's controls, so text, icons and buttons line up. */
+.status-row button,
+.title-row button,
+.thread-row button,
+.gen-row button:not(.link) {
+  height: 28px;
+}
+
+button.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 28px;
+  padding: 0 6px;
+}
+
+button.icon:hover:not(:disabled),
+button.icon:focus-visible {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--fg);
+}
+
+button.icon.danger,
+button.icon.danger:hover {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+  color: var(--fg);
+}
+
+/* H3: a cache hit did no work, so it must not look like a scan finishing (the status line). */
+.toast {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 1px dashed var(--accent);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.page-badge {
+  display: inline-block;
+  margin-bottom: 4px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-row button,
+.title-row button,
+.status-row button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Hallucination control (lib/grounding.js): notes under an answer, sentences not found in the
+   sources, and a rejected answer folded away. */
+.grounding-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  padding: 4px 8px;
+  border-left: 3px solid var(--warn-border);
+  background: var(--warn-bg);
+  border-radius: 0 6px 6px 0;
+  font-size: 12px;
+}
+
+.unsupported {
+  text-decoration: underline wavy var(--warn-border);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+details.rejected {
+  font-size: 12px;
+}
+
+details.rejected summary {
+  color: var(--muted);
+}
+
+.rejected-text {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  white-space: pre-wrap;
 }

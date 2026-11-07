@@ -101,10 +101,21 @@ Revised approach:
 - **Quota is a real constraint (2026-11-05, AI Studio):** on the free tier, every full Flash model (3, 3.6, 3.8) is capped at **5 RPM / 20 requests per day**. The user hit it after 5–6 test scans. Flash-Lite models get **15 RPM / 500 RPD** (`gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`).
 - **B3 (headings/summaries) uses `gemini-3.5-flash-lite`**, 30 sections per request, on demand (§3.2).
 - **Local Ollama (E5) is built for B3**, moved forward from phase 11 because quota became a real constraint. ⚙ settings choose either "Gemini Flash-Lite, with Ollama when its quota runs out" (falls back on any Gemini failure, i.e. 429, a 503 that persists after one retry, other HTTP errors or a network error, or when no key is set) or "Ollama only". It's fully free and private, but you have to run a local server. That's acceptable for a personal tool, a bigger ask if distributing to others. It needs no `OLLAMA_ORIGINS` change: the extension removes the `Origin` header from its own requests to `localhost:11434` (§7.1).
-- **Open for phase 6 (chat):** with 20 RPD on full Flash, chat can't rely on it. Decide then between Flash-Lite, Ollama, or a split (e.g. Flash for the final answer only). Not decided yet.
+- **Chat (phase 6, decided 2026-11-07 by the user): a model ladder.**
+  - Free-tier limits are per model, so chat uses every stable Flash model, newest first, until each one's daily quota is used up, then the Flash-Lite models, then local Ollama.
+  - The ladder is read from the API's model list (cached for a day).
+  - A per-day 429 skips that model until midnight Pacific time; a per-minute 429 skips it for a minute.
+  - Once an answer has started streaming, an error isn't retried on another model.
+  - The ⚙ provider setting covers chat too. "Ollama only" skips Gemini.
+  - Details: `docs/phased-implementation-plan/phase-6-chat.md`.
 
 ### 3.7 Retrieval + agent loop
 - Tool-use pattern: `retrieve_sections(query, k=5)` (cosine similarity over local embeddings) and `web_search(query)` (only invoked when the page's own corpus doesn't cover the question).
+- **Phase 6 decision (2026-11-07, user): retrieve, then answer, in one call, with no tool-calling for now.**
+  - The top 5 sections are always retrieved locally, and one LLM call answers with [n] citations. That's one request per question, and it works with small Ollama models.
+  - When the sources don't cover the question, the model is told to reply "The sources don't cover this."
+  - Phase 8 hooks `web_search` onto that reply, or moves to real tool-calling if that proves necessary.
+  - Footnote markers after punctuation ("…[28]") are stripped from the sources, because models copy them as citations.
 - Selection-scoped mode: if the user has text selected on the page, skip retrieval entirely and answer from just that selection — cheaper and more precise for "explain this specific part" questions.
 - Context budget is naturally bounded by `k`, not by how many pages are linked in a thread — so threads can grow without needing an explicit pruning scheme.
 - **Section embeddings are chunked (decided 2026-11-03).** MiniLM reads only ~256 tokens (~200 words), so one vector per section would represent only its opening. Each section is split into ~180-word chunks with a 30-word overlap, each chunk is embedded, and a section's retrieval score is its best chunk's similarity (max-sim). Retrieval still returns whole sections, so E1 and F2 are unaffected.
@@ -126,7 +137,7 @@ Revised approach:
 - Data model (stored in extension-level IndexedDB, survives tab close):
   ```
   Thread {
-    id, title, createdAt,
+    id, title, createdAt, updatedAt,
     pages: [ {url, title, corpusRef, addedAt} ],
     messages: [ {role, content, citedSections: [{pageUrl, sectionId}]} ]
   }
@@ -157,6 +168,21 @@ Behavior matrix:
 
 - Cache-hit case shows a toast ("already scanned, using saved data") so the no-op isn't ambiguous.
 - Entering an existing thread's chat (to ask about page 1 while sitting on page 2) is always available independent of whether "Start scan" is pressed for the current tab.
+- **Decided 2026-11-06 (phase 5, approved by the user):**
+  - **No thread picker (revised the same day by the user, replacing "sticky selection + preselect").** Each tab is linked to a thread, and the panel shows only that link:
+    - **Continuing.** A tab continues a thread when you followed a link from a thread page, either in the same tab or in a new tab opened from it (decided on the new tab's first load, so a blank/Ctrl+T tab starts fresh). The panel shows "Continuing *name* · N pages" and an × button. × makes this page start a new thread.
+    - **Reattach.** After ×, a reattach icon appears, and only then.
+    - **In the thread.** When the page is in its thread (scanned there, or saved there before), the thread's name is a heading, with the page count and a delete icon.
+    - **New thread.** Nothing is shown.
+    - Hovering the name lists the thread's pages in order, plus the current page if it isn't in the thread yet.
+    - A page some thread already holds links to it when revisited.
+    - The links live in `chrome.storage.session` (`background/tab-threads.js`), so they work with the panel closed, and a browser restart forgets them. All thread buttons are icons with hover labels.
+    - **Consequence (accepted):** an old thread can't be opened from an unrelated tab. You reach it by revisiting one of its pages. This replaces the §3.11 sketch's "Recent threads" list (G2), and H4 works through a continued tab.
+  - **Rescan.** On a page that's showing the selected thread's saved scan, a **Rescan** button reruns the pipeline and replaces that page's corpus in the thread. The old corpus is deleted.
+  - **Delete thread.** It's in the picker, with a confirm, and it removes the thread and its corpora.
+  - **Same page.** URLs are compared with no `#fragment`, no trailing slash, no tracking parameters (`utm_*`, `fbclid`, `gclid`) and a lower-case host. Other query parameters are kept. A Google Doc is matched by its document id.
+  - **Cache hit.** No extraction and no embedding. The tab's live ranges are rebuilt from the stored text-quote anchors.
+  - Details: `docs/phased-implementation-plan/phase-5-threads.md`.
 
 ---
 

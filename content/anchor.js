@@ -78,6 +78,39 @@ function anchorBlocks(blocks) {
   });
 }
 
+/**
+ * Cache hit (phase 5): rebuilds the live Ranges of a saved scan from its stored text-quote anchors,
+ * after a reload dropped them, with the same moving cursor and one exact retry from the top as
+ * anchorBlocks. No extraction. Text that changed on the page since the scan stays unanchored.
+ * @param {{id: string, anchor: {exact: string}}[]} blocks  in page order
+ * @returns {string[]} ids of the blocks that anchored
+ */
+function reanchorBlocks(blocks) {
+  const index = buildTextIndex(document.body);
+  const ranges = globalThis.__summarizerRanges;
+  ranges.clear();
+
+  let cursor = 0;
+  const anchored = [];
+  for (const block of blocks) {
+    const quote = block.anchor?.exact;
+    let m = findQuote(index.text, quote, cursor);
+    let advance = true;
+    if (!m) {
+      const retry = findQuote(index.text, quote, 0);
+      if (retry?.exact) {
+        m = retry;
+        advance = false;
+      }
+    }
+    if (!m) continue;
+    ranges.set(block.id, rangeFromIndex(index, m.start, m.end));
+    if (advance) cursor = m.end;
+    anchored.push(block.id);
+  }
+  return anchored;
+}
+
 function unanchoredBlock(block) {
   return { ...block, anchor: { exact: block.text, prefix: "", suffix: "" }, anchored: false, match: null };
 }

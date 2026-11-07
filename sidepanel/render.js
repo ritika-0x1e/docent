@@ -3,6 +3,7 @@
 
 const STAGE_TEXT = {
   starting: () => "Starting…",
+  loading: () => "Loading the saved scan…",
   extracting: () => "Reading the page…",
   sectioning: () => "Finding topic breaks…",
   sectioned: (tab) => `Found ${tab.sections.length} sections`,
@@ -21,14 +22,15 @@ function el(tag, props = {}, children = []) {
   return node;
 }
 
-function statusText(tab) {
+// savedIn: the tab's thread, when it already holds this page (Start scan is then a cache hit).
+function statusText(tab, savedIn) {
   switch (tab.status) {
     case "idle":
-      return "Not scanned yet";
+      return savedIn ? "Saved in this thread. Start scan loads it." : "Not scanned yet";
     case "scanning":
       return (STAGE_TEXT[tab.stage] ?? (() => "Scanning…"))(tab);
     case "ready":
-      return `${tab.sections.length} sections ready`;
+      return `${tab.sections.length} sections ready${tab.cacheHit ? " (saved scan)" : ""}`;
     case "needs-force":
       return tab.detail?.classification === "link-list" ? "Mostly links, not an article" : "Not enough text detected";
     case "no-access":
@@ -185,9 +187,13 @@ function showAction(section) {
   return null;
 }
 
-function idleHint(tab) {
+function idleHint(tab, threadMode) {
   if (!tab) return "Open a tab to scan it.";
-  if (tab.status === "idle") return "Press Start scan to read this page into sections.";
+  if (tab.status === "idle") {
+    if (threadMode === "in") return "This page is saved in the thread. Press Start scan to load it, or search the thread below.";
+    if (threadMode === "continued") return "Press Start scan to add this page to the thread, or search the thread below without scanning.";
+    return "Press Start scan to read this page into a new thread.";
+  }
   if (tab.status === "scanning") return "Reading the page…";
   return "";
 }
@@ -195,14 +201,14 @@ function idleHint(tab) {
 // Re-renders the cards only when the tab or its sections array changed. The reducer replaces the
 // array on every real change, including each B3 batch, so when the same tab re-renders, open
 // "Full text" sections and the scroll position are carried over instead of resetting.
-function renderReadingView(tabId, tab, container, handlers) {
+function renderReadingView(tabId, tab, container, handlers, threadMode = "none") {
   const sections = tab?.sections ?? null;
   const prev = container.__rendered;
   if (sections && prev?.tabId === tabId && prev.sections === sections) return;
   container.__rendered = { tabId, sections };
 
   if (!sections) {
-    const hint = idleHint(tab);
+    const hint = idleHint(tab, threadMode);
     container.replaceChildren(...(hint ? [el("p", { class: "muted", text: hint })] : []));
     return;
   }
@@ -218,38 +224,261 @@ function renderReadingView(tabId, tab, container, handlers) {
   container.scrollTop = scrollTop;
 }
 
-// Decision 2: find-sections results — score, heading, best-chunk snippet, and a show/jump action.
-function renderFindResults(result, container, { onShowSection }) {
-  if (!result) return container.replaceChildren();
-  if (result.pending) return container.replaceChildren(el("p", { class: "muted", text: "Searching…" }));
-  if (!result.ok) return container.replaceChildren(el("p", { class: "muted", text: result.error }));
-  if (!result.hits.length) return container.replaceChildren(el("p", { class: "muted", text: "No sections found." }));
+// I3 (phase 6): the conversation for the tab's thread. Answers are plain text with **bold**, "- "
+// bullets and [n] citations; they're built as DOM nodes (never innerHTML), [n] as chips that jump
+// to their source card.
+const CITE_OR_BOLD = /(\*\*[^*\n]+\*\*|\[\d+(?:\s*,\s*\d+)*\])/;
 
-  container.replaceChildren(
-    ...result.hits.map((hit) => {
-      const kids = [];
-      if (hit.headingPath?.length) kids.push(el("div", { class: "breadcrumb", text: hit.headingPath.join(" › ") }));
-      kids.push(
-        el("div", { class: "hit-head" }, [el("span", { class: "text", text: hit.heading ?? "Untitled section" }), el("span", { class: "score", text: hit.score.toFixed(3) })])
-      );
-      kids.push(el("p", { class: "snippet", text: hit.snippet }));
-      const label = hit.action === "highlight" ? "Show on page" : hit.action === "jump" ? "Jump to section" : null;
-      kids.push(
-        label
-          ? el("div", { class: "card-actions" }, [el("button", { type: "button", class: "link", text: label, onclick: () => onShowSection(hit.index) })])
-          : el("div", { class: "card-actions muted", text: "Snippet only" })
-      );
-      return el("div", { class: "hit" }, kids);
-    })
-  );
+// Only numbers with a source card become chips; any other [n] (e.g. a copied footnote) stays text.
+function inlineNodes(text, onCite, valid) {
+  const nodes = [];
+  for (const part of text.split(CITE_OR_BOLD)) {
+    if (!part) continue;
+    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) nodes.push(el("strong", { text: part.slice(2, -2) }));
+    else if (/^\[\d/.test(part)) {
+      const numbers = part.slice(1, -1).split(",").map((x) => Number(x.trim()));
+      if (!numbers.every((n) => valid.has(n))) nodes.push(document.createTextNode(part));
+      else for (const n of numbers) nodes.push(el("button", { type: "button", class: "cite", text: String(n), title: `Source ${n}`, onclick: () => onCite(n) }));
+    } else nodes.push(document.createTextNode(part));
+  }
+  return nodes;
 }
 
-function renderHeader(tab, dom, handlers) {
+// Sentences the grounding check didn't find in the sources (lib/grounding.js) are underlined. They're
+// matched the way the check split them: per line, at sentence ends, without bullets, bold or numbering.
+const SENTENCE_END = /(?<=[.!?](?:\*\*)?)\s+(?=(?:\*\*)?[A-Z0-9"“(])/;
+const sentenceKey = (segment) => segment.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, "").replace(/\*\*/g, "").trim();
+
+function lineNodes(line, onCite, valid, unsupported) {
+  if (!unsupported?.size) return inlineNodes(line, onCite, valid);
+  const nodes = [];
+  line.split(SENTENCE_END).forEach((segment, i) => {
+    if (i > 0) nodes.push(document.createTextNode(" "));
+    const inner = inlineNodes(segment, onCite, valid);
+    if (unsupported.has(sentenceKey(segment))) nodes.push(el("span", { class: "unsupported", title: "Not found in the sources" }, inner));
+    else nodes.push(...inner);
+  });
+  return nodes;
+}
+
+function answerBody(text, onCite, valid, unsupported = null) {
+  const blocks = [];
+  let list = null;
+  for (const line of text.split("\n")) {
+    const bullet = /^\s*[-*•]\s+(.*)$/.exec(line);
+    if (bullet) {
+      list ??= el("ul");
+      list.append(el("li", {}, lineNodes(bullet[1], onCite, valid, unsupported)));
+      continue;
+    }
+    if (list) {
+      blocks.push(list);
+      list = null;
+    }
+    if (line.trim()) blocks.push(el("p", {}, lineNodes(line, onCite, valid, unsupported)));
+  }
+  if (list) blocks.push(list);
+  return el("div", { class: "answer" }, blocks);
+}
+
+function modelLabel(message) {
+  if (message.provider === "gemini" && message.model) {
+    return message.model.replace(/^gemini-/, "Gemini ").replace(/-flash-lite$/, " Flash-Lite").replace(/-flash$/, " Flash");
+  }
+  if (message.provider === "ollama") return `local ${message.model}`;
+  return null;
+}
+
+// A cited section: number, page badge when it's from another page, heading, snippet, and Show on page
+// when it's from this tab's scan (F2 adds "open page and highlight" for the others in phase 7).
+function sourceCard(source, tab, { onShowSection }) {
+  const here = tab?.status === "ready" && tab.corpusId === source.corpusId;
+  const live = here ? tab.sections?.[source.order] : null;
+  const action = live && showAction(live);
+  const kids = [el("span", { class: "source-n", text: String(source.n) })];
+  const body = [];
+  if (!here && source.pageTitle) body.push(el("div", { class: "page-badge", text: source.pageTitle, title: source.pageUrl ?? source.pageTitle }));
+  body.push(el("div", { class: "source-heading", text: source.heading ?? "Untitled section" }));
+  if (source.snippet) body.push(el("p", { class: "snippet", text: source.snippet }));
+  if (action) body.push(el("button", { type: "button", class: "link small", text: action, onclick: () => onShowSection(source.order) }));
+  kids.push(el("div", { class: "source-body" }, body));
+  const card = el("li", { class: "source" }, kids);
+  card.dataset.n = String(source.n);
+  return card;
+}
+
+// question: the user message this answers (for Ask anyway); last: the newest message in the log.
+function chatMessage(message, tab, handlers, { question = null, last = false } = {}) {
+  if (message.role === "user") return el("div", { class: "msg user" }, [el("p", { text: message.content })]);
+  const node = el("div", { class: "msg assistant" });
+  const onCite = (n) => {
+    const card = node.querySelector(`.source[data-n="${n}"]`);
+    if (!card) return;
+    card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    card.classList.remove("flash");
+    void card.offsetWidth; // restart the animation
+    card.classList.add("flash");
+  };
+  const unsupported = message.grounding?.verdict === "partly" ? new Set(message.grounding.unsupported.map((s) => sentenceKey(s.text))) : null;
+  if (message.pending && !message.content) node.append(el("p", { class: "muted typing", text: message.status ?? "Thinking…" }));
+  else node.append(answerBody(message.content, onCite, new Set((message.citedSections ?? []).map((s) => s.n)), unsupported));
+  if (message.pending && message.checking) node.append(el("p", { class: "muted typing small", text: "Checking the answer against the sources…" }));
+  if (message.error) node.append(el("p", { class: "msg-error", text: message.error }));
+
+  // Hallucination control (lib/grounding.js), said plainly under the answer.
+  if (message.gated) {
+    const kids = [el("span", { text: "No part of the pages is close to this question, so the model wasn't asked." })];
+    if (last && question && handlers.onAskAnyway) kids.push(el("button", { type: "button", class: "link small", text: "Ask anyway", onclick: () => handlers.onAskAnyway(question) }));
+    node.append(el("div", { class: "grounding-note" }, kids));
+  } else if (message.rejected) {
+    node.append(
+      el("details", { class: "rejected" }, [
+        el("summary", { text: "The model answered, but none of it is in the sources" }),
+        el("p", { class: "muted small", text: "Probably from its own memory, possibly wrong. Hidden for that reason:" }),
+        el("p", { class: "rejected-text", text: message.rejected }),
+      ])
+    );
+  } else if (unsupported) {
+    const n = message.grounding.unsupported.length;
+    node.append(el("div", { class: "grounding-note" }, [el("span", { text: `${n} sentence${n === 1 ? "" : "s"} not found in the sources (underlined). Check before relying on ${n === 1 ? "it" : "them"}.` })]));
+  }
+
+  const notes = [];
+  if (message.mode === "selection") notes.push("From your selection");
+  if (message.stopped) notes.push("Stopped");
+  const label = modelLabel(message);
+  if (label) notes.push(`${label}${FALLBACK_TEXT[message.fallback] ? ` (${FALLBACK_TEXT[message.fallback]})` : ""}`);
+  if (notes.length) node.append(el("div", { class: "msg-meta", text: notes.join(" · ") }));
+
+  if (message.citedSections?.length) {
+    const cards = el("ol", { class: "sources" }, message.citedSections.map((s) => sourceCard(s, tab, handlers)));
+    // No [n] in the answer (small local models often skip them): the sections it was given, folded.
+    if (message.uncited) {
+      node.append(el("details", { class: "uncited", title: "The answer didn't cite its sources" }, [el("summary", { text: `Sources it was given (${message.citedSections.length}), not cited` }), cards]));
+    } else node.append(cards);
+  }
+  return node;
+}
+
+/**
+ * @param {{pending, failed}} live  the answer in progress, or the last one that failed (not saved);
+ *   each {threadId, question, text, mode, status, error} or null (panel.js)
+ */
+function renderChat(state, { pending, failed }, dom, handlers) {
+  const tab = activeTab(state);
+  const { thread } = threadView(state);
+  const chatThread = tab?.threadId ? thread : null; // detached: a new thread starts on the next scan
+  const busy = Boolean(pending);
+  const canAsk = Boolean(chatThread) && !busy;
+
+  dom.chatInput.disabled = !chatThread;
+  dom.chatSend.disabled = !canAsk;
+  dom.chatSend.hidden = busy;
+  dom.chatStop.hidden = !busy;
+  dom.chatInput.placeholder = chatThread ? `Ask about ${chatThread.pages.length > 1 ? "this thread's pages" : "this page"}…` : "Scan this page to start chatting";
+
+  const nearBottom = dom.chatLog.scrollHeight - dom.chatLog.scrollTop - dom.chatLog.clientHeight < 40;
+  let messages = [...(chatThread?.messages ?? [])];
+  // Ask anyway replaces the gated turn it came from: hide that turn while the new answer runs.
+  if (pending?.force && messages.at(-1)?.gated && messages.at(-2)?.content === pending.question) messages = messages.slice(0, -2);
+  const shown = pending ?? failed;
+  if (shown && shown.threadId === chatThread?.id) {
+    messages.push({ role: "user", content: shown.question });
+    messages.push({ role: "assistant", content: shown.text, pending: Boolean(pending), checking: shown.checking, status: shown.status, error: shown.error, mode: shown.mode });
+  }
+  if (!messages.length) {
+    dom.chatLog.replaceChildren(
+      el("p", { class: "muted chat-empty", text: chatThread ? "Ask anything about the pages in this thread. Answers cite their sources." : "Chat starts once this page is scanned." })
+    );
+    return;
+  }
+  const askAnyway = busy ? {} : handlers; // no Ask anyway while an answer is running
+  dom.chatLog.replaceChildren(
+    ...messages.map((m, i) => chatMessage(m, tab, m.role === "assistant" ? askAnyway : handlers, { question: messages[i - 1]?.role === "user" ? messages[i - 1].content : null, last: i === messages.length - 1 }))
+  );
+  if (nearBottom || pending) dom.chatLog.scrollTop = dom.chatLog.scrollHeight;
+}
+
+// Hover card for the thread name: the path to this page, i.e. the thread's pages in the order they
+// joined, up to and including this one (pages that joined after it aren't shown; user, 2026-11-07),
+// each arrow leading to the next. A page that's continuing the thread but isn't scanned yet hangs
+// off the end on a dashed arrow. Only scanned pages are in a thread (user, 2026-11-07);
+// pages passed through unscanned aren't kept. Shown on hover and on keyboard focus (CSS).
+function threadTrail(thread, tab, mode) {
+  let steps = thread.pages.map((p) => ({
+    title: p.title || p.url,
+    here: mode === "in" && Boolean(tab?.url) && normalizeUrl(p.url) === normalizeUrl(tab.url),
+    pending: false,
+  }));
+  const here = steps.findIndex((step) => step.here);
+  if (here !== -1) steps = steps.slice(0, here + 1); // URL unknown (no access yet): the whole thread
+  if (mode === "continued") steps.push({ title: tab?.title || "This page", here: true, pending: true });
+
+  const items = [];
+  steps.forEach((step, i) => {
+    if (i > 0) items.push(el("li", { class: `trail-arrow${step.pending ? " pending" : ""}`, ariaHidden: "true" }, [icon("arrowDown", 14)]));
+    const label = [el("span", { class: "trail-title", text: step.title })];
+    if (step.here) label.push(el("span", { class: "trail-tag", text: step.pending ? "this page · not scanned yet" : "this page" }));
+    items.push(el("li", { class: `trail-step${step.here ? " here" : ""}${step.pending ? " pending" : ""}` }, [el("span", { class: "trail-dot" }), el("span", { class: "trail-label" }, label)]));
+  });
+
+  return el("div", { class: "thread-pop", role: "tooltip" }, [
+    el("div", { class: "pop-head", text: steps.some((step) => step.here) ? "Path to this page" : "Pages in this thread" }),
+    el("ol", { class: "trail" }, items),
+  ]);
+}
+
+// G2 (revised 2026-11-06, user): no picker. The tab's thread shows only when there is one:
+// "Continuing <name>" with × while this page isn't in it yet, or the name as a heading once it is.
+function renderThreadRow(state, dom, { onDetachThread, onDeleteThread }, { confirmingDelete }) {
+  const { mode, thread } = threadView(state);
+  const tab = activeTab(state);
+  const busy = tab?.status === "scanning";
+  dom.threadRow.hidden = mode === "none" || mode === "detached";
+  if (dom.threadRow.hidden) return dom.threadRow.replaceChildren();
+
+  const pages = `${thread.pages.length} page${thread.pages.length === 1 ? "" : "s"}`;
+  // Icon, name and count are one hover target; the trail card opens below it.
+  const name =
+    mode === "continued"
+      ? el("span", { class: "thread-name continued" }, [el("span", { class: "muted", text: "Continuing " }), el("strong", { text: thread.title })])
+      : el("h2", { class: "thread-name", text: thread.title });
+  const hover = el("span", { class: "thread-hover", tabIndex: 0 }, [
+    el("span", { class: "thread-icon" }, [icon(mode === "continued" ? "continues" : "pages", 14)]),
+    name,
+    // The count is the thread's saved pages: this page joins it (and the count) once its scan is done.
+    el("span", { class: "thread-count", text: pages }),
+    threadTrail(thread, tab, mode),
+  ]);
+  hover.setAttribute("aria-label", `${mode === "continued" ? "Continuing" : "Thread"} ${thread.title}, ${pages}`);
+  const nodes = [hover];
+
+  if (mode === "continued") {
+    const close = el("button", { type: "button", class: "icon", disabled: busy, onclick: onDetachThread });
+    setIcon(close, "close", `Don't continue "${thread.title}": scan this page into a new thread`);
+    nodes.push(close);
+  } else {
+    const del = el("button", { type: "button", class: confirmingDelete ? "icon danger" : "icon", disabled: busy, onclick: onDeleteThread });
+    setIcon(del, "trash", confirmingDelete ? "Click again to delete this thread and its saved scans" : "Delete this thread");
+    if (confirmingDelete) del.append(el("span", { class: "small", text: "Delete?" }));
+    nodes.push(del);
+  }
+  dom.threadRow.replaceChildren(...nodes);
+}
+
+function renderHeader(state, dom, handlers) {
+  const tab = activeTab(state);
+  const controls = scanControls(state);
+  // × was pressed: only a reattach button, and only while that thread still exists.
+  const view = threadView(state);
+  dom.reattachThread.hidden = view.mode !== "detached" || tab?.status === "scanning";
+  if (view.mode === "detached") setIcon(dom.reattachThread, "link", `Continue "${view.thread.title}" on this page`);
   dom.tabTitle.textContent = tab ? tab.title || "This tab" : "No tab";
-  dom.status.textContent = tab ? statusText(tab) : "";
+  dom.status.textContent = tab ? statusText(tab, controls.savedIn) : "";
+  dom.startScan.hidden = !controls.start;
   dom.startScan.disabled = !tab || tab.status === "scanning";
-  dom.startScan.textContent = tab?.status === "ready" ? "Rescan" : "Start scan";
-  dom.findInput.disabled = dom.findSubmit.disabled = tab?.status !== "ready" || !tab.corpusId;
+  dom.rescan.hidden = !controls.rescan;
+  dom.rescan.disabled = tab?.relabeling ?? false;
 
   const genNodes = genRowNodes(tab, handlers);
   dom.genRow.hidden = genNodes.length === 0;

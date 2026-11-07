@@ -5,12 +5,17 @@ const dom = {
   tabTitle: document.getElementById("tab-title"),
   status: document.getElementById("status"),
   startScan: document.getElementById("start-scan"),
+  rescan: document.getElementById("rescan"),
+  threadRow: document.getElementById("thread-row"),
+  reattachThread: document.getElementById("reattach-thread"),
+  toast: document.getElementById("toast"),
   banner: document.getElementById("banner"),
   readingView: document.getElementById("reading-view"),
-  findForm: document.getElementById("find-form"),
-  findInput: document.getElementById("find-input"),
-  findSubmit: document.getElementById("find-submit"),
-  findResults: document.getElementById("find-results"),
+  chatLog: document.getElementById("chat-log"),
+  chatForm: document.getElementById("chat-form"),
+  chatInput: document.getElementById("chat-input"),
+  chatSend: document.getElementById("chat-send"),
+  chatStop: document.getElementById("chat-stop"),
   settingsToggle: document.getElementById("settings-toggle"),
   settings: document.getElementById("settings"),
   geminiKey: document.getElementById("gemini-key"),
@@ -30,8 +35,12 @@ let windowId = null;
 let port = null;
 let nextScanId = 1;
 let hasAllSites = false;
-// Find-sections results per tab, tied to the corpus they were searched in (decision 2, temporary).
-const findResults = new Map(); // tabId → {corpusId, result}
+// The chat answer in progress (one at a time per panel): {chatId, threadId, question, text, mode, status, error}.
+let pending = null;
+let chatPort = null;
+let nextChatId = 1;
+let confirmingDelete = false;
+let toastTimer = null;
 
 const handlers = {
   onForceScan: () => startScan({ force: true }),
@@ -40,19 +49,66 @@ const handlers = {
   onShowSection: (index) => showSection(index),
   onGenerateHeadings: () => generateHeadings(),
   onStopGenerating: () => chrome.runtime.sendMessage({ type: "panel-stop-relabel", tabId: state.activeTabId }).catch(() => {}),
+  onDetachThread: () => changeTabThread("panel-detach-thread"),
+  onDeleteThread: () => onDeleteThread(),
+  onAskAnyway: (question) => askQuestion(question, { force: true }),
 };
 
 function dispatch(event) {
+  const before = activeTab(state)?.threadId;
   state = panelReducer(state, event);
+  if (activeTab(state)?.threadId !== before) confirmingDelete = false;
+  // H3: a cache hit is announced apart from the status line, so it can't pass for a finished scan.
+  if (event.type === "scan-progress" && event.stage === "done" && event.cacheHit && event.tabId === state.activeTabId) {
+    showToast("Already scanned. Using saved data, nothing was re-read or re-embedded.");
+  }
   render();
 }
 
 function render() {
   const tab = activeTab(state);
-  renderHeader(tab, dom, handlers);
-  renderReadingView(state.activeTabId, tab, dom.readingView, handlers);
-  const found = findResults.get(state.activeTabId);
-  renderFindResults(found && found.corpusId === tab?.corpusId ? found.result : null, dom.findResults, handlers);
+  renderThreadRow(state, dom, handlers, { confirmingDelete });
+  renderHeader(state, dom, handlers);
+  renderReadingView(state.activeTabId, tab, dom.readingView, handlers, threadView(state).mode);
+  renderChat(state, { pending, failed }, dom, handlers);
+}
+
+function showToast(text) {
+  dom.toast.textContent = text;
+  dom.toast.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (dom.toast.hidden = true), 5000);
+}
+
+// The background keeps each tab's thread link (background/tab-threads.js); ask it for this tab's.
+async function loadTabThread(tabId) {
+  const result = await chrome.runtime.sendMessage({ type: "panel-tab-thread", tabId }).catch(() => null);
+  if (result?.ok) dispatch({ type: "tab-thread", tabId, ...result });
+}
+
+// × (detach) or reattach on the active tab.
+async function changeTabThread(type) {
+  const tabId = state.activeTabId;
+  const result = await chrome.runtime.sendMessage({ type, tabId }).catch(() => null);
+  if (result?.ok) dispatch({ type: "tab-thread", tabId, ...result });
+}
+
+// Two clicks: the first turns the button into a confirm, which resets after a few seconds.
+let confirmTimer = null;
+async function onDeleteThread() {
+  const threadId = activeTab(state)?.threadId;
+  if (!threadId) return;
+  if (!confirmingDelete) {
+    confirmingDelete = true;
+    clearTimeout(confirmTimer);
+    confirmTimer = setTimeout(() => ((confirmingDelete = false), render()), 4000);
+    return render();
+  }
+  confirmingDelete = false;
+  clearTimeout(confirmTimer);
+  const result = await chrome.runtime.sendMessage({ type: "panel-delete-thread", threadId }).catch((err) => ({ ok: false, error: err.message }));
+  if (!result?.ok) console.warn("[Summarizer] couldn't delete thread", threadId, result?.error);
+  dispatch({ type: "thread-deleted", threadId });
 }
 
 async function showSection(index) {
@@ -72,15 +128,70 @@ async function generateHeadings() {
   dispatch({ type: "relabel-done", tabId, corpusId: result?.corpusId ?? corpusId, ...(result ?? { ok: false, error: "no response" }) });
 }
 
-async function findSections(query) {
-  const tabId = state.activeTabId;
-  const corpusId = activeTab(state)?.corpusId;
-  if (!query || !corpusId) return;
-  findResults.set(tabId, { corpusId, result: { pending: true } });
+// I3: questions go to the background over a "chat" port; the answer streams back and is saved on
+// the thread, which then replaces the panel's copy (so every tab in the thread shows it).
+function chatChannel() {
+  if (chatPort) return chatPort;
+  chatPort = chrome.runtime.connect({ name: "chat" });
+  chatPort.onMessage.addListener(onChatMessage);
+  chatPort.onDisconnect.addListener(() => {
+    chatPort = null;
+    if (pending) {
+      pending = { ...pending, error: "Lost connection to the background worker. Ask again." };
+      finishPending();
+    }
+  });
+  return chatPort;
+}
+
+function onChatMessage(message) {
+  if (!pending || message.chatId !== pending.chatId) return;
+  if (message.type === "sources") {
+    pending = { ...pending, mode: message.mode, status: message.mode === "selection" ? "Reading your selection…" : `Read ${message.count} sections. Writing…` };
+  } else if (message.type === "delta") {
+    pending = { ...pending, text: pending.text + message.text };
+  } else if (message.type === "checking") {
+    pending = { ...pending, checking: true };
+  } else if (message.type === "done") {
+    pending = null;
+    dispatch({ type: "thread-updated", thread: message.thread });
+    return;
+  } else if (message.type === "error") {
+    pending = { ...pending, error: message.error };
+    return finishPending();
+  }
   render();
-  const result = await chrome.runtime.sendMessage({ type: "panel-find", tabId, query }).catch((err) => ({ ok: false, error: err.message }));
-  findResults.set(tabId, { corpusId, result });
+}
+
+// A failed answer isn't saved; it stays on screen until the next question.
+let failed = null;
+function finishPending() {
+  failed = pending;
+  pending = null;
   render();
+}
+
+// force: "Ask anyway" on an answer the relevance gate gave (the model wasn't asked).
+function askQuestion(question, { force = false } = {}) {
+  const tab = activeTab(state);
+  if (!question || pending || !tab?.threadId) return;
+  failed = null;
+  pending = { chatId: nextChatId++, tabId: state.activeTabId, threadId: tab.threadId, question, force, text: "", mode: null, status: "Finding sources…", error: null };
+  chatChannel().postMessage({ type: "ask", chatId: pending.chatId, tabId: pending.tabId, threadId: pending.threadId, question, force });
+  if (force) return render();
+  dom.chatInput.value = "";
+  autoGrow();
+  render();
+}
+
+function stopAnswer() {
+  if (pending) chatPort?.postMessage({ type: "stop", chatId: pending.chatId });
+}
+
+// The input grows with its text, up to about five lines.
+function autoGrow() {
+  dom.chatInput.style.height = "auto";
+  dom.chatInput.style.height = `${Math.min(dom.chatInput.scrollHeight, 120)}px`;
 }
 
 // ⚙: chrome.storage.local keys read by background/llm.js. geminiApiKey is the same key Phase B's
@@ -125,20 +236,22 @@ function scanPort() {
 
 // Chrome hides tab.url for tabs the extension can't access, so a missing URL means this scan would
 // fail. Ask for access first; if it's declined, scan anyway and let the no-access banner explain.
-function startScan({ force = false } = {}) {
+// The background picks the matrix row (new thread / append / cache hit) from the tab's thread.
+function startScan({ force = false, rescan = false } = {}) {
   const tabId = state.activeTabId;
   if (tabId === null) return;
   if (!hasAllSites && !activeTab(state).url) {
-    requestAllSites().then(() => launchScan(tabId, force));
+    requestAllSites().then(() => launchScan(tabId, { force, rescan }));
     return;
   }
-  launchScan(tabId, force);
+  launchScan(tabId, { force, rescan });
 }
 
-function launchScan(tabId, force) {
+function launchScan(tabId, { force, rescan }) {
   const scanId = nextScanId++;
+  const threadId = state.tabs[tabId]?.threadId ?? null;
   dispatch({ type: "scan-started", tabId, scanId });
-  scanPort().postMessage({ type: "start", tabId, scanId, force });
+  scanPort().postMessage({ type: "start", tabId, scanId, force, rescan, threadId });
 }
 
 async function refreshTabInfo(tabId) {
@@ -167,19 +280,24 @@ async function init() {
   holdPanelPort();
   hasAllSites = await chrome.permissions.contains(ALL_SITES);
   const [tab] = await chrome.tabs.query({ active: true, windowId });
-  if (tab) dispatch({ type: "tab-activated", ...tabInfo(tab) });
-  else dispatch({ type: "noop" });
+  if (tab) {
+    dispatch({ type: "tab-activated", ...tabInfo(tab) });
+    loadTabThread(tab.id);
+  } else dispatch({ type: "noop" });
 
   chrome.tabs.onActivated.addListener(async (info) => {
     if (info.windowId !== windowId) return;
     const activated = await chrome.tabs.get(info.tabId).catch(() => null);
     dispatch({ type: "tab-activated", ...(activated ? tabInfo(activated) : { tabId: info.tabId }) });
+    loadTabThread(info.tabId);
   });
 
   // changeInfo.url/title are only reported with access to the tab, so a new load ("loading") is
   // what marks a navigation. Reloads count too: they drop the content script and its ranges.
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, updated) => {
     if (changeInfo.status === "loading") dispatch({ type: "tab-navigated", ...tabInfo(updated) });
+    // Once loaded the URL is known: a page some thread already holds links to it.
+    if (changeInfo.status === "complete") loadTabThread(tabId);
     else if (changeInfo.title !== undefined || changeInfo.status === "complete") dispatch({ type: "tab-info", ...tabInfo(updated) });
   });
 
@@ -200,10 +318,25 @@ async function init() {
   chrome.permissions.onRemoved.addListener(onPermissionsChanged);
 
   dom.startScan.addEventListener("click", () => startScan());
-  dom.findForm.addEventListener("submit", (e) => {
+  dom.rescan.addEventListener("click", () => startScan({ rescan: true }));
+  dom.reattachThread.addEventListener("click", () => changeTabThread("panel-reattach-thread"));
+  setIcon(dom.rescan, "rescan");
+  setIcon(dom.settingsToggle, "settings");
+  dom.chatForm.addEventListener("submit", (e) => {
     e.preventDefault();
-    findSections(dom.findInput.value.trim());
+    askQuestion(dom.chatInput.value.trim());
   });
+  // Enter sends; Shift+Enter is a new line.
+  dom.chatInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      askQuestion(dom.chatInput.value.trim());
+    }
+  });
+  dom.chatInput.addEventListener("input", autoGrow);
+  dom.chatStop.addEventListener("click", stopAnswer);
+  setIcon(dom.chatSend, "send", "Send (Enter)");
+  setIcon(dom.chatStop, "stop", "Stop answering");
   dom.settingsToggle.addEventListener("click", () => toggleSettings());
   dom.llmProvider.addEventListener("change", () => chrome.storage.local.set({ llmProvider: dom.llmProvider.value }));
   dom.ollamaModel.addEventListener("change", () => chrome.storage.local.set({ ollamaModel: dom.ollamaModel.value.trim() }));

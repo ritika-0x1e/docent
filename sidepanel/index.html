@@ -8,14 +8,20 @@
   </head>
   <body>
     <header class="header">
+      <!-- G2 (revised 2026-11-06): the tab's thread, shown only when there is one; no picker. -->
+      <div class="thread-row" id="thread-row" hidden></div>
       <div class="title-row">
         <div class="tab-title" id="tab-title">—</div>
-        <button type="button" id="settings-toggle" class="icon" aria-label="Settings" aria-expanded="false" title="Settings">⚙</button>
+        <button type="button" id="reattach-thread" class="icon" hidden></button>
+        <button type="button" id="settings-toggle" class="icon" aria-label="Settings" aria-expanded="false" title="Settings"></button>
       </div>
       <div class="status-row">
         <div class="status" id="status" role="status" aria-live="polite"></div>
+        <button type="button" id="rescan" class="icon" hidden aria-label="Rescan" title="Rescan: read this page again and replace its saved data in the thread"></button>
         <button type="button" id="start-scan" class="primary">Start scan</button>
       </div>
+      <!-- H3: cache-hit notice, styled apart from a finished scan. -->
+      <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
       <div class="banner" id="banner" hidden></div>
       <div class="gen-row" id="gen-row" hidden></div>
 
@@ -45,15 +51,19 @@
 
     <main class="reading-view" id="reading-view"></main>
 
-    <!-- Phase 4 decision 2: temporary "find sections" box over C's retrieval; replaced by chat (I3, phase 6). -->
-    <section class="chat-area" id="chat-area">
-      <form class="field-row" id="find-form">
-        <input type="search" id="find-input" placeholder="Find sections… (chat arrives in phase 6)" disabled />
-        <button type="submit" id="find-submit" disabled>Find</button>
+    <!-- I3 (phase 6): chat over the tab's thread; replaced phase 4's find-sections box. -->
+    <section class="chat-area" id="chat-area" aria-label="Chat">
+      <div class="chat-log" id="chat-log" aria-live="polite"></div>
+      <form class="chat-form" id="chat-form">
+        <textarea id="chat-input" rows="1" placeholder="Ask about this page…" disabled></textarea>
+        <button type="button" id="chat-stop" class="icon" hidden></button>
+        <button type="submit" id="chat-send" class="primary icon-only" disabled></button>
       </form>
-      <div class="find-results" id="find-results"></div>
+      <p class="chat-hint muted small" id="chat-hint">Select text on the page to ask about just that part.</p>
     </section>
 
+    <script src="../lib/threads.js"></script>
+    <script src="icons.js"></script>
     <script src="../lib/panel-state.js"></script>
     <script src="render.js"></script>
     <script src="panel.js"></script>
