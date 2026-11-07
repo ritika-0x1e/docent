@@ -16,6 +16,13 @@ For any cited section whose source page is the currently open/active tab:
 3. Style via a `::highlight(name)` CSS rule — do not wrap the range in a `<span>` or otherwise mutate the DOM.
 4. Clear/replace the highlight when a new answer is given, rather than accumulating highlights indefinitely.
 
+## As built in phase 7 (2026-11-07)
+
+- **Passage, not section.** Each citation stores `passages: [{blockId, exact}]`: the sentence(s) of the section that best match the answer sentences citing it (`lib/passages.js`, local embeddings, floor `PASSAGE_MIN`). The passage gets a translucent tint; the rest of the section an underline in the same colour. No passage → the whole section is tinted.
+- **Colours.** A random palette colour per citation, one named highlight per colour (`summarizer-cite-<i>`, `summarizer-cite-ctx-<i>`), styles in `background/citation-styles.js`; `CITE_COLORS` in `content/citations.js` must match the palette length.
+- **Triggers.** The [n] chip or card toggles the highlight (opening/focusing the source page if needed); Esc, the next question and closing the panel clear it. Reading-view cards only flash (`summarizer-flash`, 2 s).
+- **Selection answers.** [1] is the selected text (`selection: true, quote`), highlighted as one quote.
+
 ## Citation-to-response mapping (F2)
 
 Every chat response that draws on retrieved sections must carry, per citation, at minimum: `{pageUrl, sectionId}`. Render this as a small badge in the chat UI (e.g. page title + section heading) — not just a bare highlight with no visible reference, since citations may point to pages other than the current one.

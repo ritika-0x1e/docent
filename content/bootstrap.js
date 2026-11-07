@@ -86,7 +86,12 @@ async function handleScan(message) {
       // E3: the text selected on the page when a question is sent ("" if none).
       "get-selection": () => ({ ok: true, text: normalizeText(String(window.getSelection() ?? "")) }),
       "jump-to-outline-heading": (message) => jumpToOutlineHeading(message.jump),
-      "clear-highlight": () => (clearDebugHighlight(), { ok: true }),
+      // F1/F2 (phase 7): a citation's passage and section; Show on page for a reading-view card.
+      "highlight-citation": (message) => highlightCitation(message.blocks, message.passages),
+      "clear-citation": () => ({ ok: true, cleared: clearCitation() }),
+      "flash-section": (message) => flashSection(message.blocks),
+      // The panel closed: nothing it showed stays on the page.
+      "clear-highlight": () => (clearDebugHighlight(), clearCitation(), clearFlash(), { ok: true }),
     };
 
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

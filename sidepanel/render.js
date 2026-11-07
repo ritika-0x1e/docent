@@ -289,39 +289,84 @@ function modelLabel(message) {
   return null;
 }
 
-// A cited section: number, page badge when it's from another page, heading, snippet, and Show on page
-// when it's from this tab's scan (F2 adds "open page and highlight" for the others in phase 7).
-function sourceCard(source, tab, { onShowSection }) {
-  const here = tab?.status === "ready" && tab.corpusId === source.corpusId;
+// What clicking citation [n] (or its card's button) does (phase 7): highlight it on this tab, open
+// (or focus) its page and highlight there (F3), or jump to it in a Google Doc. The number goes straight
+// to the page (user, 2026-11-07); the cards sit in a closed fold. Messages saved before phase 7 lack highlightable/jump, so they're read
+// off the live section when there is one.
+// "Here": this tab shows the source's page, scanned or not; its saved anchors are found on the page
+// again when highlighting (user, 2026-11-07).
+function isHere(source, tab) {
+  if (tab?.status === "ready" && source.corpusId && tab.corpusId === source.corpusId) return true;
+  return Boolean(tab?.url && source.pageUrl) && normalizeUrl(tab.url) === normalizeUrl(source.pageUrl);
+}
+
+function citationAction(source, tab, active) {
+  const here = isHere(source, tab);
   const live = here ? tab.sections?.[source.order] : null;
-  const action = live && showAction(live);
-  const kids = [el("span", { class: "source-n", text: String(source.n) })];
+  const highlightable = source.highlightable ?? (live ? live.blocks?.some((b) => b.anchored) : true);
+  const jump = source.jump ?? Boolean(live?.jump);
+  if (here) {
+    if (highlightable) return { label: active ? "Clear highlight" : "Show on page", open: false, toggle: true };
+    if (jump) return { label: "Jump to section", open: false };
+    return null;
+  }
+  if (!source.pageUrl) return null;
+  if (highlightable) return { label: active ? "Clear highlight" : "Open page and highlight", open: true, toggle: true };
+  if (jump) return { label: "Open and jump to section", open: true };
+  return null;
+}
+
+
+// A source card (inside the closed "Sources" fold): number, page badge when it's from another page,
+// heading, snippet, and the same action as its [n] chip.
+function sourceCard(source, tab, handlers, { messageKey, activeKey }) {
+  const key = `${messageKey}:${source.n}`;
+  const active = activeKey === key;
+  const action = citationAction(source, tab, active);
   const body = [];
-  if (!here && source.pageTitle) body.push(el("div", { class: "page-badge", text: source.pageTitle, title: source.pageUrl ?? source.pageTitle }));
+  if (!isHere(source, tab) && source.pageTitle) body.push(el("div", { class: "page-badge", text: source.pageTitle, title: source.pageUrl ?? source.pageTitle }));
   body.push(el("div", { class: "source-heading", text: source.heading ?? "Untitled section" }));
   if (source.snippet) body.push(el("p", { class: "snippet", text: source.snippet }));
-  if (action) body.push(el("button", { type: "button", class: "link small", text: action, onclick: () => onShowSection(source.order) }));
-  kids.push(el("div", { class: "source-body" }, body));
-  const card = el("li", { class: "source" }, kids);
+  if (action) body.push(el("button", { type: "button", class: "link small", text: action.label, onclick: () => handlers.onCitation(key, source, action) }));
+  const card = el("li", { class: `source${active ? " active" : ""}` }, [el("span", { class: "source-n", text: String(source.n) }), el("div", { class: "source-body" }, body)]);
   card.dataset.n = String(source.n);
   return card;
 }
 
+// Which answers' source folds are open, so a re-render (every streamed piece, every click) keeps them.
+const openSourceFolds = new Set();
+
+// A chip's tooltip: which section, on which page, and what a click does.
+function citeTitle(source, tab, action) {
+  const where = [isHere(source, tab) ? null : source.pageTitle, source.heading].filter(Boolean).join(" › ");
+  const does = action ? ` · click: ${action.label.toLowerCase()}` : "";
+  return `${source.n}. ${where || "Source"}${does}`;
+}
+
 // question: the user message this answers (for Ask anyway); last: the newest message in the log.
-function chatMessage(message, tab, handlers, { question = null, last = false } = {}) {
+function chatMessage(message, tab, handlers, { question = null, last = false, activeKey = null } = {}) {
   if (message.role === "user") return el("div", { class: "msg user" }, [el("p", { text: message.content })]);
   const node = el("div", { class: "msg assistant" });
+  const messageKey = message.createdAt ?? "pending";
+  // An [n] chip goes straight to the page (user, 2026-11-07): it highlights the source there, opening
+  // or focusing its page if it's another one, and a second click clears it.
   const onCite = (n) => {
-    const card = node.querySelector(`.source[data-n="${n}"]`);
-    if (!card) return;
-    card.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    card.classList.remove("flash");
-    void card.offsetWidth; // restart the animation
-    card.classList.add("flash");
+    const source = message.citedSections?.find((s) => s.n === n);
+    const action = source && !message.pending && citationAction(source, tab, activeKey === `${messageKey}:${n}`);
+    if (action) handlers.onCitation(`${messageKey}:${n}`, source, action);
   };
   const unsupported = message.grounding?.verdict === "partly" ? new Set(message.grounding.unsupported.map((s) => sentenceKey(s.text))) : null;
   if (message.pending && !message.content) node.append(el("p", { class: "muted typing", text: message.status ?? "Thinking…" }));
   else node.append(answerBody(message.content, onCite, new Set((message.citedSections ?? []).map((s) => s.n)), unsupported));
+  const markChips = () => {
+    for (const chip of node.querySelectorAll(".cite")) {
+      const n = Number(chip.textContent);
+      const source = message.citedSections?.find((s) => s.n === n);
+      chip.classList.toggle("active", activeKey === `${messageKey}:${n}`);
+      if (source) chip.title = citeTitle(source, tab, citationAction(source, tab, activeKey === `${messageKey}:${n}`));
+    }
+  };
+  markChips();
   if (message.pending && message.checking) node.append(el("p", { class: "muted typing small", text: "Checking the answer against the sources…" }));
   if (message.error) node.append(el("p", { class: "msg-error", text: message.error }));
 
@@ -350,12 +395,19 @@ function chatMessage(message, tab, handlers, { question = null, last = false } =
   if (label) notes.push(`${label}${FALLBACK_TEXT[message.fallback] ? ` (${FALLBACK_TEXT[message.fallback]})` : ""}`);
   if (notes.length) node.append(el("div", { class: "msg-meta", text: notes.join(" · ") }));
 
-  if (message.citedSections?.length) {
-    const cards = el("ol", { class: "sources" }, message.citedSections.map((s) => sourceCard(s, tab, handlers)));
-    // No [n] in the answer (small local models often skip them): the sections it was given, folded.
-    if (message.uncited) {
-      node.append(el("details", { class: "uncited", title: "The answer didn't cite its sources" }, [el("summary", { text: `Sources it was given (${message.citedSections.length}), not cited` }), cards]));
-    } else node.append(cards);
+  // The sources, folded and closed by default (user, 2026-11-07): the [n] chips go straight to the
+  // page; the cards are there when wanted. An answer with no [n] (small models), or a "not covered"
+  // from the model, lists the sections it was given.
+  if (message.citedSections?.length && !message.pending) {
+    const n = message.citedSections.length;
+    const label = message.uncited ? `Sources it was given (${n}), not cited` : `Sources (${n})`;
+    const fold = el("details", { class: "source-fold" }, [
+      el("summary", { text: label }),
+      el("ol", { class: "sources" }, message.citedSections.map((src) => sourceCard(src, tab, handlers, { messageKey, activeKey }))),
+    ]);
+    fold.open = openSourceFolds.has(messageKey);
+    fold.addEventListener("toggle", () => (fold.open ? openSourceFolds.add(messageKey) : openSourceFolds.delete(messageKey)));
+    node.append(fold);
   }
   return node;
 }
@@ -364,7 +416,7 @@ function chatMessage(message, tab, handlers, { question = null, last = false } =
  * @param {{pending, failed}} live  the answer in progress, or the last one that failed (not saved);
  *   each {threadId, question, text, mode, status, error} or null (panel.js)
  */
-function renderChat(state, { pending, failed }, dom, handlers) {
+function renderChat(state, { pending, failed, activeCitation, confirmingClear }, dom, handlers) {
   const tab = activeTab(state);
   const { thread } = threadView(state);
   const chatThread = tab?.threadId ? thread : null; // detached: a new thread starts on the next scan
@@ -376,6 +428,12 @@ function renderChat(state, { pending, failed }, dom, handlers) {
   dom.chatSend.hidden = busy;
   dom.chatStop.hidden = !busy;
   dom.chatInput.placeholder = chatThread ? `Ask about ${chatThread.pages.length > 1 ? "this thread's pages" : "this page"}…` : "Scan this page to start chatting";
+
+  // Clear chat: in the chat's header, shown only when there's a conversation and no answer running.
+  document.getElementById("chat-head").hidden = !chatThread?.messages?.length || busy;
+  dom.chatClear.classList.toggle("confirm", Boolean(confirmingClear));
+  dom.chatClear.replaceChildren(icon("erase", 13), document.createTextNode(confirmingClear ? "Click again to clear" : "Clear"));
+  dom.chatClear.title = confirmingClear ? "Deletes this thread's conversation; its pages stay" : "Clear chat (the thread's pages stay)";
 
   const nearBottom = dom.chatLog.scrollHeight - dom.chatLog.scrollTop - dom.chatLog.clientHeight < 40;
   let messages = [...(chatThread?.messages ?? [])];
@@ -394,7 +452,7 @@ function renderChat(state, { pending, failed }, dom, handlers) {
   }
   const askAnyway = busy ? {} : handlers; // no Ask anyway while an answer is running
   dom.chatLog.replaceChildren(
-    ...messages.map((m, i) => chatMessage(m, tab, m.role === "assistant" ? askAnyway : handlers, { question: messages[i - 1]?.role === "user" ? messages[i - 1].content : null, last: i === messages.length - 1 }))
+    ...messages.map((m, i) => chatMessage(m, tab, m.role === "assistant" ? askAnyway : handlers, { question: messages[i - 1]?.role === "user" ? messages[i - 1].content : null, last: i === messages.length - 1, activeKey: activeCitation?.key ?? null }))
   );
   if (nearBottom || pending) dom.chatLog.scrollTop = dom.chatLog.scrollHeight;
 }
@@ -422,6 +480,8 @@ function threadTrail(thread, tab, mode) {
     items.push(el("li", { class: `trail-step${step.here ? " here" : ""}${step.pending ? " pending" : ""}` }, [el("span", { class: "trail-dot" }), el("span", { class: "trail-label" }, label)]));
   });
 
+  // A single step isn't a path (the thread's first page, user 2026-11-07): no card.
+  if (steps.length < 2) return null;
   return el("div", { class: "thread-pop", role: "tooltip" }, [
     el("div", { class: "pop-head", text: steps.some((step) => step.here) ? "Path to this page" : "Pages in this thread" }),
     el("ol", { class: "trail" }, items),
@@ -443,12 +503,13 @@ function renderThreadRow(state, dom, { onDetachThread, onDeleteThread }, { confi
     mode === "continued"
       ? el("span", { class: "thread-name continued" }, [el("span", { class: "muted", text: "Continuing " }), el("strong", { text: thread.title })])
       : el("h2", { class: "thread-name", text: thread.title });
-  const hover = el("span", { class: "thread-hover", tabIndex: 0 }, [
+  const trail = threadTrail(thread, tab, mode);
+  const hover = el("span", { class: `thread-hover${trail ? " has-trail" : ""}`, ...(trail ? { tabIndex: 0 } : {}) }, [
     el("span", { class: "thread-icon" }, [icon(mode === "continued" ? "continues" : "pages", 14)]),
     name,
     // The count is the thread's saved pages: this page joins it (and the count) once its scan is done.
     el("span", { class: "thread-count", text: pages }),
-    threadTrail(thread, tab, mode),
+    ...(trail ? [trail] : []),
   ]);
   hover.setAttribute("aria-label", `${mode === "continued" ? "Continuing" : "Thread"} ${thread.title}, ${pages}`);
   const nodes = [hover];

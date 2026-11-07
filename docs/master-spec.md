@@ -34,8 +34,8 @@ Content script (per tab)
 Background service worker
   → embeddings (Transformers.js, local, in a Web Worker hosted by an offscreen document — see §7.1)
   → vector store (IndexedDB, cosine similarity)
-  → agent loop (tool-use: retrieve_sections, web_search)
-  → LLM calls (Gemini free tier: Flash-Lite for headings/summaries; local Ollama as fallback or alternative, §3.6)
+  → chat: retrieve top-k, then one LLM call (§3.7); web_search from phase 8
+  → LLM calls (Gemini free tier: Flash-Lite for headings/summaries, the Flash model ladder for chat; local Ollama as fallback or alternative, §3.6)
         ↓
 Side panel UI (chrome.sidePanel)
   → thread/chat management
@@ -116,8 +116,13 @@ Revised approach:
   - When the sources don't cover the question, the model is told to reply "The sources don't cover this."
   - Phase 8 hooks `web_search` onto that reply, or moves to real tool-calling if that proves necessary.
   - Footnote markers after punctuation ("…[28]") are stripped from the sources, because models copy them as citations.
+  - **Hallucination control (2026-11-07, user):** a local relevance gate before the call (best section score < 0.2: "not covered", the model isn't asked, with Ask anyway), and a local grounding check after it (sentences and numbers not found in the sources are marked; an answer with none of it in the sources is shown as not covered). Details: `phase-6-chat.md`.
 - Selection-scoped mode: if the user has text selected on the page, skip retrieval entirely and answer from just that selection — cheaper and more precise for "explain this specific part" questions.
 - Context budget is naturally bounded by `k`, not by how many pages are linked in a thread — so threads can grow without needing an explicit pruning scheme.
+- **Retrieval for chat (2026-11-07, from the user's testing):**
+  - **Blended ranking.** The plain top 4 plus the top 4 after centring (the thread's mean chunk vector taken away from the question and the chunks), so on a page that's all about one topic the distinctive words still count. Usually 4–6 sections. The relevance gate keeps plain cosine scores.
+  - **Typos.** A question word (4+ letters) that the thread's pages never use, with a page word one edit away (two for 8+ letters), is corrected, and retrieval runs with both questions. Words the pages use, and everyday question words, are never changed.
+  - Measured on White House, MDN, Python docs, React docs and Photosynthesis, 35 questions (6 with typos): the right section reached the model in 29 → 33. No question got worse.
 - **Section embeddings are chunked (decided 2026-11-03).** MiniLM reads only ~256 tokens (~200 words), so one vector per section would represent only its opening. Each section is split into ~180-word chunks with a 30-word overlap, each chunk is embedded, and a section's retrieval score is its best chunk's similarity (max-sim). Retrieval still returns whole sections, so E1 and F2 are unaffected.
 
 ### 3.8 Citation highlighting
@@ -125,6 +130,12 @@ Revised approach:
 - If the cited section's source page is the currently open tab → highlight live.
 - If the cited section came from a different page in the thread (crawled but not open) → show as a snippet + page badge with an "open page and highlight" action, rather than trying to highlight a page that isn't rendered.
 - If the cited section is from a **Google Doc** (§3.1a), whether open or not → snippet + page badge + **Jump to section** (opens the doc at that heading); never a live highlight. Sections without a heading id (intro, or B2-split) are snippet-only.
+- **Phase 7 decisions (2026-11-07, user):**
+  - What's highlighted is the **passage**: the sentence(s) in the cited section that support the claim, matched locally when the answer is saved. It gets a translucent tint in a random palette colour; the rest of the section gets an underline in the same colour. With no clear passage, the whole section is tinted.
+  - Clicking an [n] chip highlights the page directly (opening or focusing the source's page if it's another one); a second click, Esc, the next question or closing the panel clears it. One citation at a time.
+  - Reading-view cards jump to their section with a short flash; nothing stays highlighted.
+  - Open page and highlight focuses a tab already showing that page, or opens a new tab next to the current one.
+  - Details: `docs/phased-implementation-plan/phase-7-citations.md`.
 
 ### 3.9 Web search fallback (decided: redirect-only, no crawling of results)
 - No paid API needed. Background service worker does a plain `fetch()` against DuckDuckGo's HTML endpoint (`html.duckduckgo.com/html/`) — lighter than Google's SERP, no JS requirement. Flagged as unofficial/could break if DDG changes markup; Brave Search API (small free tier) is the fallback if so.
@@ -147,7 +158,7 @@ Revised approach:
 - Soft cap of ~6–8 linked pages per thread — mainly to keep the picklist/citation UI usable, not because retrieval would break past that.
 
 ### 3.11 Scan button (decided: explicit trigger, avoids double work)
-On side panel open, nothing runs automatically. UI shows:
+On side panel open, nothing runs automatically (except loading a page that's already saved in its thread, see below). UI shows:
 ```
 [ this page: <title> — not scanned yet ]
 Recent threads:
@@ -182,6 +193,7 @@ Behavior matrix:
   - **Delete thread.** It's in the picker, with a confirm, and it removes the thread and its corpora.
   - **Same page.** URLs are compared with no `#fragment`, no trailing slash, no tracking parameters (`utm_*`, `fbclid`, `gclid`) and a lower-case host. Other query parameters are kept. A Google Doc is matched by its document id.
   - **Cache hit.** No extraction and no embedding. The tab's live ranges are rebuilt from the stored text-quote anchors.
+  - **Saved pages load by themselves (2026-11-07, user).** Since a cache hit reads and embeds nothing, a page already saved in its thread loads when the panel shows it, without Start scan and without the toast. New pages still scan only on Start scan.
   - Details: `docs/phased-implementation-plan/phase-5-threads.md`.
 
 ---
@@ -231,8 +243,8 @@ Each item below should be buildable and testable in isolation before integration
 - **E1.** `retrieve_sections(query, k=5)` tool
 - **E2.** `web_search(query)` tool — DuckDuckGo HTML fetch, sponsored-result filtering, top-3 extraction
 - **E3.** Selection-scoped answering mode (bypass retrieval when text is selected)
-- **E4.** Gemini Flash integration for the agent loop (tool-calling)
-- **E5.** Local Ollama fallback path when Gemini quota is exhausted. *Built for B3 on 2026-11-05 (§3.6); still to extend to chat in phase 6.*
+- **E4.** The LLM call that answers: Gemini Flash model ladder, retrieve-then-answer in one call (no tool-calling for now, §3.6–3.7)
+- **E5.** Local Ollama fallback path when Gemini quota is exhausted. *Built for B3 on 2026-11-05 and for chat in phase 6 (§3.6).*
 
 ### F. Citation & highlighting
 - **F1.** CSS Custom Highlight API integration — highlight a `Range` on the live page
@@ -268,12 +280,12 @@ Recommended build sequence — each phase should be functional and testable befo
 3. **C** — Local embeddings + retrieval, tested standalone ("show top 5 sections for this query"). C1's worker already exists from step 2.
 4. **H1, H2 (partial), I1, I2** — Side panel shell with scan button wired to A+B+C for a single page, no threads yet. The chat area temporarily holds a "find sections" search box (top-5 retrieval results, click to highlight) so retrieval can be tested through the UI; it's removed when I3 lands in step 6 (decided 2026-11-03).
 5. **G1, G2, G3, H3, H4** — Thread persistence and the full scan-button behavior matrix, still single-page corpora
-6. **E1, E3, E4, I3** — Wire retrieval + Gemini Flash into an actual chat loop with selection-scoped mode
+6. **E1, E3, E4, I3** — Wire retrieval + Gemini Flash into an actual chat loop with selection-scoped mode (built as retrieve-then-answer with the model ladder, §3.6–3.7)
 7. **F1, F2, F3** — Citation highlighting (live + cross-page snippet mode)
 8. **E2** — Web search tool: DDG fetch, sponsor filtering, top-3 cards, redirect-on-click
 9. **D1–D6** — Link harvesting, scoring, quota/backfill, picklist UI, approved-link crawling (most fragile piece — nav/inline heuristics will need real-world tuning against actual sites)
 10. **G4** — Soft cap warning once multi-page threads are common in testing
-11. **E5** — Local Ollama fallback (only if/when Gemini quota becomes a real constraint). *B3's part was pulled forward on 2026-11-05 once it did; chat's part follows phase 6.*
+11. **E5** — Local Ollama fallback (only if/when Gemini quota becomes a real constraint). *B3's part was pulled forward on 2026-11-05 once it did; chat's part was built in phase 6.*
 
 Per-phase plans live in `docs/phased-implementation-plan/`, one file per phase.
 

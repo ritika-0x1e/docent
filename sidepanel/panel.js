@@ -16,6 +16,7 @@ const dom = {
   chatInput: document.getElementById("chat-input"),
   chatSend: document.getElementById("chat-send"),
   chatStop: document.getElementById("chat-stop"),
+  chatClear: document.getElementById("chat-clear"),
   settingsToggle: document.getElementById("settings-toggle"),
   settings: document.getElementById("settings"),
   geminiKey: document.getElementById("gemini-key"),
@@ -38,7 +39,6 @@ let hasAllSites = false;
 // The chat answer in progress (one at a time per panel): {chatId, threadId, question, text, mode, status, error}.
 let pending = null;
 let chatPort = null;
-let nextChatId = 1;
 let confirmingDelete = false;
 let toastTimer = null;
 
@@ -52,6 +52,7 @@ const handlers = {
   onDetachThread: () => changeTabThread("panel-detach-thread"),
   onDeleteThread: () => onDeleteThread(),
   onAskAnyway: (question) => askQuestion(question, { force: true }),
+  onCitation: (key, source, action) => toggleCitation(key, source, action),
 };
 
 function dispatch(event) {
@@ -59,7 +60,7 @@ function dispatch(event) {
   state = panelReducer(state, event);
   if (activeTab(state)?.threadId !== before) confirmingDelete = false;
   // H3: a cache hit is announced apart from the status line, so it can't pass for a finished scan.
-  if (event.type === "scan-progress" && event.stage === "done" && event.cacheHit && event.tabId === state.activeTabId) {
+  if (event.type === "scan-progress" && event.stage === "done" && event.cacheHit && event.tabId === state.activeTabId && !autoLoads.delete(event.scanId)) {
     showToast("Already scanned. Using saved data, nothing was re-read or re-embedded.");
   }
   render();
@@ -70,7 +71,7 @@ function render() {
   renderThreadRow(state, dom, handlers, { confirmingDelete });
   renderHeader(state, dom, handlers);
   renderReadingView(state.activeTabId, tab, dom.readingView, handlers, threadView(state).mode);
-  renderChat(state, { pending, failed }, dom, handlers);
+  renderChat(state, { pending, failed, activeCitation, confirmingClear }, dom, handlers);
 }
 
 function showToast(text) {
@@ -83,7 +84,21 @@ function showToast(text) {
 // The background keeps each tab's thread link (background/tab-threads.js); ask it for this tab's.
 async function loadTabThread(tabId) {
   const result = await chrome.runtime.sendMessage({ type: "panel-tab-thread", tabId }).catch(() => null);
-  if (result?.ok) dispatch({ type: "tab-thread", tabId, ...result });
+  if (!result?.ok) return;
+  dispatch({ type: "tab-thread", tabId, ...result });
+  if (result.threadId && !pending) chatChannel().postMessage({ type: "watch", threadId: result.threadId });
+  autoLoadSaved(tabId);
+}
+
+// A page already saved in its thread loads by itself (user, 2026-11-07): a cache hit reads and embeds
+// nothing, it only re-finds the saved sections on the page, so there's no reason to wait for Start
+// scan. New pages still scan only on Start scan (spec §3.11).
+const autoLoads = new Set(); // scanIds started here: their "already scanned" toast isn't shown
+function autoLoadSaved(tabId) {
+  if (tabId !== state.activeTabId) return;
+  const tab = activeTab(state);
+  if (tab?.status !== "idle" || !scanControls(state).savedIn) return;
+  autoLoads.add(launchScan(tabId, { force: false, rescan: false }));
 }
 
 // × (detach) or reattach on the active tab.
@@ -145,6 +160,14 @@ function chatChannel() {
 }
 
 function onChatMessage(message) {
+  // An answer still running in this thread from before the panel was (re)opened.
+  if (message.type === "live") {
+    if (pending) return;
+    failed = null;
+    const { chatId, threadId, question, text, mode, status, checking, force } = message;
+    pending = { chatId, threadId, question, text, mode, status, checking, force, error: null };
+    return render();
+  }
   if (!pending || message.chatId !== pending.chatId) return;
   if (message.type === "sources") {
     pending = { ...pending, mode: message.mode, status: message.mode === "selection" ? "Reading your selection…" : `Read ${message.count} sections. Writing…` };
@@ -171,12 +194,65 @@ function finishPending() {
   render();
 }
 
+// Clear chat: two clicks, like Delete thread; the first turns the button into a confirm for a few seconds.
+let confirmingClear = false;
+let clearTimer = null;
+async function onClearChat() {
+  const threadId = activeTab(state)?.threadId;
+  if (!threadId || pending) return;
+  if (!confirmingClear) {
+    confirmingClear = true;
+    clearTimeout(clearTimer);
+    clearTimer = setTimeout(() => ((confirmingClear = false), render()), 4000);
+    return render();
+  }
+  confirmingClear = false;
+  clearTimeout(clearTimer);
+  clearCitation();
+  failed = null;
+  const result = await chrome.runtime.sendMessage({ type: "panel-clear-chat", threadId }).catch((err) => ({ ok: false, error: err.message }));
+  if (result?.ok) dispatch({ type: "thread-updated", thread: result.thread });
+  else showToast(result?.error ?? "Couldn't clear the chat.");
+}
+
+// Phase 7: the one citation highlighted on a page, {key: "<message createdAt>:<n>", tabId}, or null.
+let activeCitation = null;
+
+function clearCitation() {
+  if (!activeCitation) return;
+  chrome.runtime.sendMessage({ type: "panel-clear-citation", tabId: activeCitation.tabId }).catch(() => {});
+  activeCitation = null;
+}
+
+// Show on page / Open page and highlight / Clear highlight (decisions 2 and 4). Jumps (Google Docs)
+// don't toggle: nothing stays on the page.
+async function toggleCitation(key, source, action) {
+  if (activeCitation?.key === key) {
+    clearCitation();
+    return render();
+  }
+  // Opening another page needs site access; ask now, while the click still counts as a user gesture.
+  if (action.open && !hasAllSites && !(await requestAllSites())) return showToast("Site access is needed to open and highlight other pages.");
+  clearCitation();
+  const citation = { n: source.n, corpusId: source.corpusId, sectionId: source.sectionId, pageUrl: source.pageUrl, passages: source.passages ?? [], selection: source.selection, quote: source.quote };
+  const result = await chrome.runtime
+    .sendMessage({ type: "panel-show-citation", tabId: state.activeTabId, citation, open: action.open })
+    .catch((err) => ({ ok: false, error: err.message }));
+  if (!result?.ok) {
+    showToast(result?.error ?? "Couldn't show this source.");
+    return render();
+  }
+  if (action.toggle && !result.jumped) activeCitation = { key, tabId: result.tabId };
+  render();
+}
+
 // force: "Ask anyway" on an answer the relevance gate gave (the model wasn't asked).
 function askQuestion(question, { force = false } = {}) {
   const tab = activeTab(state);
   if (!question || pending || !tab?.threadId) return;
   failed = null;
-  pending = { chatId: nextChatId++, tabId: state.activeTabId, threadId: tab.threadId, question, force, text: "", mode: null, status: "Finding sources…", error: null };
+  clearCitation(); // a new question clears the last answer's highlight (decision 2)
+  pending = { chatId: crypto.randomUUID(), tabId: state.activeTabId, threadId: tab.threadId, question, force, text: "", mode: null, status: "Finding sources…", error: null };
   chatChannel().postMessage({ type: "ask", chatId: pending.chatId, tabId: pending.tabId, threadId: pending.threadId, question, force });
   if (force) return render();
   dom.chatInput.value = "";
@@ -189,9 +265,14 @@ function stopAnswer() {
 }
 
 // The input grows with its text, up to about five lines.
+// border-box: the height includes the 1px borders that scrollHeight leaves out. A scrollbar only
+// past ~5 lines; below that the box grows with the text.
 function autoGrow() {
-  dom.chatInput.style.height = "auto";
-  dom.chatInput.style.height = `${Math.min(dom.chatInput.scrollHeight, 120)}px`;
+  const input = dom.chatInput;
+  input.style.height = "auto";
+  const full = input.scrollHeight + 2;
+  input.style.height = `${Math.min(full, 120)}px`;
+  input.style.overflowY = full > 120 ? "auto" : "hidden";
 }
 
 // ⚙: chrome.storage.local keys read by background/llm.js. geminiApiKey is the same key Phase B's
@@ -252,6 +333,7 @@ function launchScan(tabId, { force, rescan }) {
   const threadId = state.tabs[tabId]?.threadId ?? null;
   dispatch({ type: "scan-started", tabId, scanId });
   scanPort().postMessage({ type: "start", tabId, scanId, force, rescan, threadId });
+  return scanId;
 }
 
 async function refreshTabInfo(tabId) {
@@ -275,7 +357,77 @@ function holdPanelPort() {
   }
 }
 
+// The splitter between sections and chat. Its position is a share of the space both use, so it
+// survives resizing the panel, and it's kept per browser in localStorage (a convenience only).
+const SPLIT_KEY = "summarizer.split";
+const READING_MIN = 48;
+const CHAT_MIN = 200;
+
+function setupSplitter() {
+  const splitter = document.getElementById("splitter");
+  const reading = dom.readingView;
+  const chat = document.getElementById("chat-area");
+  const space = () => reading.getBoundingClientRect().height + chat.getBoundingClientRect().height;
+  let share = null;
+  try {
+    share = Number(localStorage.getItem(SPLIT_KEY)) || null;
+  } catch {
+    /* storage blocked: default split */
+  }
+
+  const apply = () => {
+    if (share == null) return (reading.style.flex = "");
+    const px = Math.max(READING_MIN, Math.min(space() - CHAT_MIN, share * space()));
+    reading.style.flex = `0 0 ${px}px`;
+  };
+  const save = () => {
+    try {
+      if (share == null) localStorage.removeItem(SPLIT_KEY);
+      else localStorage.setItem(SPLIT_KEY, String(share));
+    } catch {
+      /* not kept */
+    }
+  };
+  const setHeight = (px) => {
+    share = Math.max(READING_MIN, Math.min(space() - CHAT_MIN, px)) / space();
+    apply();
+  };
+
+  splitter.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    splitter.setPointerCapture(event.pointerId);
+    splitter.classList.add("dragging");
+    document.body.classList.add("resizing");
+    const top = reading.getBoundingClientRect().top;
+    const move = (e) => setHeight(e.clientY - top);
+    const up = () => {
+      splitter.removeEventListener("pointermove", move);
+      splitter.classList.remove("dragging");
+      document.body.classList.remove("resizing");
+      save();
+    };
+    splitter.addEventListener("pointermove", move);
+    splitter.addEventListener("pointerup", up, { once: true });
+    splitter.addEventListener("pointercancel", up, { once: true });
+  });
+  splitter.addEventListener("keydown", (event) => {
+    const step = event.key === "ArrowUp" ? -32 : event.key === "ArrowDown" ? 32 : 0;
+    if (!step) return;
+    event.preventDefault();
+    setHeight(reading.getBoundingClientRect().height + step);
+    save();
+  });
+  splitter.addEventListener("dblclick", () => {
+    share = null;
+    apply();
+    save();
+  });
+  window.addEventListener("resize", apply);
+  apply();
+}
+
 async function init() {
+  setupSplitter();
   ({ id: windowId } = await chrome.windows.getCurrent());
   holdPanelPort();
   hasAllSites = await chrome.permissions.contains(ALL_SITES);
@@ -306,7 +458,10 @@ async function init() {
   // Clicking the toolbar icon grants activeTab, which makes the tab's title readable.
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type === "action-clicked") refreshTabInfo(message.tabId);
-    else if (message?.type === "relabel-progress") dispatch({ type: "relabel-progress", tabId: message.tabId, corpusId: message.corpusId, sections: message.sections });
+    else if (message?.type === "citation-cleared") {
+      // Esc on the page cleared it.
+      if (activeCitation) ((activeCitation = null), render());
+    } else if (message?.type === "relabel-progress") dispatch({ type: "relabel-progress", tabId: message.tabId, corpusId: message.corpusId, sections: message.sections });
   });
 
   // Granted here or revoked in Chrome's settings: titles of every known tab may have changed.
@@ -335,6 +490,7 @@ async function init() {
   });
   dom.chatInput.addEventListener("input", autoGrow);
   dom.chatStop.addEventListener("click", stopAnswer);
+  dom.chatClear.addEventListener("click", onClearChat);
   setIcon(dom.chatSend, "send", "Send (Enter)");
   setIcon(dom.chatStop, "stop", "Stop answering");
   dom.settingsToggle.addEventListener("click", () => toggleSettings());

@@ -17,6 +17,9 @@ importScripts(
   "../lib/gemini-ladder.js",
   "../lib/chat-prompt.js",
   "../lib/grounding.js",
+  "../lib/passages.js",
+  "../lib/spelling.js",
+  "citation-styles.js",
   "vendor/idb.js",
   "sectioning.js",
   "llm.js",
@@ -262,17 +265,97 @@ globalThis.embed = async (texts) => {
   return vectors;
 };
 
+// Only what the content script needs to find a section's text: ids and anchors, in page order.
+function anchoredBlocks(section) {
+  return section.blocks.filter((b) => b.anchored).map((b) => ({ id: b.id, anchor: { exact: b.anchor.exact } }));
+}
+
+const PAGE_LOAD_TIMEOUT_MS = 30000;
+
+function waitForTabLoad(tabId) {
+  return new Promise((resolve) => {
+    const done = (ok) => {
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve(ok);
+    };
+    const listener = (id, info) => id === tabId && info.status === "complete" && done(true);
+    const timer = setTimeout(() => done(false), PAGE_LOAD_TIMEOUT_MS);
+    chrome.tabs.onUpdated.addListener(listener);
+    chrome.tabs.get(tabId).then((t) => t.status === "complete" && done(true), () => done(false));
+  });
+}
+
+// F3 (decision 4): a tab already showing the page (same normalized URL, this window first) is
+// focused; otherwise the page opens in a new tab next to the current one. It joins the thread on its
+// own: the thread already holds that page (tab-threads.js, page match).
+async function focusOrOpen(pageUrl, fromTabId) {
+  const from = await chrome.tabs.get(fromTabId).catch(() => null);
+  const want = normalizeUrl(pageUrl);
+  const tabs = await chrome.tabs.query({});
+  const match = tabs.filter((t) => t.url && normalizeUrl(t.url) === want).sort((a, b) => (b.windowId === from?.windowId) - (a.windowId === from?.windowId))[0];
+  let tab = match;
+  if (match) {
+    await chrome.tabs.update(match.id, { active: true });
+    if (match.windowId !== from?.windowId) await chrome.windows.update(match.windowId, { focused: true });
+  } else {
+    tab = await chrome.tabs.create({ url: pageUrl, active: true, ...(from ? { windowId: from.windowId, index: from.index + 1 } : {}) });
+  }
+  return (await waitForTabLoad(tab.id)) ? tab.id : null;
+}
+
+async function showCitation(tabId, citation, open) {
+  // A selection-mode answer's source is the selected text itself: one quote, no saved section.
+  const section = citation.selection
+    ? { blocks: [{ id: `selection:${citation.quote?.length}:${citation.quote?.slice(0, 40)}`, anchored: true, anchor: { exact: citation.quote ?? "" } }], jump: null }
+    : (await getSections(citation.corpusId, [citation.sectionId]))[0];
+  if (!section) return { ok: false, error: "This source's saved scan is gone." };
+  let target = tabId;
+  if (open) {
+    if (!citation.pageUrl) return { ok: false, error: "This source has no page address." };
+    target = await focusOrOpen(citation.pageUrl, tabId);
+    if (target == null) return { ok: false, error: "The page didn't finish loading." };
+  }
+  const injected = await ensureInjected(target);
+  if (injected.blocked) return { ok: false, needsAccess: true, tabId: target, error: "Can't reach that page. Allow site access and try again." };
+
+  if (!section.blocks.some((b) => b.anchored)) {
+    if (!section.jump) return { ok: false, tabId: target, error: "This source can't be shown on the page." };
+    const result = await chrome.tabs.sendMessage(target, { type: "jump-to-outline-heading", jump: section.jump });
+    return { ...result, tabId: target, jumped: true };
+  }
+  await ensureCitationStyles(target);
+  const result = await chrome.tabs.sendMessage(target, { type: "highlight-citation", blocks: anchoredBlocks(section), passages: citation.passages ?? [] });
+  if (!result?.ok) return { ...result, tabId: target };
+  if (!result.highlighted) return { ok: false, tabId: target, error: "This text isn't on the page any more." };
+  await rememberHighlight(target);
+  console.log(`[Summarizer/F1] citation ${citation.n}: ${result.passages ? `${result.passages} passage(s)` : "whole section"} highlighted on tab ${target}${open ? " (opened from another page)" : ""}`);
+  return { ...result, tabId: target };
+}
+
 // The panel's requests about a scanned tab (reading view, thread links). Chat has its own port
 // (bottom of this file); phase 4's temporary find-sections box was removed with it. Content scripts
 // never send these.
 const panelHandlers = {
-  // Show a section on the page: live highlight when anchored, outline jump on Google Docs.
+  // Reading-view card (phase 7, decision 3): scroll to the section and flash it, then it fades.
+  // Outline jump on Google Docs.
   "panel-show-section": async ({ tabId, index }) => {
     const section = (await getLastScan(tabId))?.sections[index];
     if (!section) return { ok: false, error: "This tab's scan is gone. Scan it again." };
-    if (section.blocks.some((b) => b.anchored)) return highlightSection(tabId, index);
+    if (section.blocks.some((b) => b.anchored)) {
+      await ensureCitationStyles(tabId);
+      const result = await chrome.tabs.sendMessage(tabId, { type: "flash-section", blocks: anchoredBlocks(section) });
+      return result?.highlighted ? result : { ok: false, error: "This section's text isn't on the page any more." };
+    }
     if (section.jump) return jumpTo(tabId, index);
     return { ok: false, error: "This section can't be shown on the page." };
+  },
+  // F1/F2/F3 (phase 7): highlight a citation's passage and section. open: the citation is from
+  // another page, so that page's tab is focused, or opened next to this one, first (decision 4).
+  "panel-show-citation": ({ tabId, citation, open }) => showCitation(tabId, citation, open),
+  "panel-clear-citation": async ({ tabId }) => {
+    const result = await chrome.tabs.sendMessage(tabId, { type: "clear-citation" }).catch(() => null);
+    return { ok: true, cleared: Boolean(result?.cleared) };
   },
   // B3 on demand ("Generate headings"): label the saved scan's sections that have no summary yet,
   // streaming each batch to the panel, then save in place. No re-extraction or re-embedding: chunk
@@ -290,6 +373,12 @@ const panelHandlers = {
   "panel-detach-thread": async ({ tabId }) => ({ ok: true, ...(await detachTabThread(tabId)) }),
   "panel-reattach-thread": async ({ tabId }) => ({ ok: true, ...(await reattachTabThread(tabId)) }),
   // Decision 3: removes the thread and every corpus it points to; tabs linked to it start fresh.
+  // Clear chat: the thread's conversation goes; its pages and scans stay. Not while it's answering.
+  "panel-clear-chat": async ({ threadId }) => {
+    if ([...liveChats.values()].some((live) => live.threadId === threadId)) return { ok: false, error: "Wait for the answer to finish, or stop it, first." };
+    const thread = await updateThread(threadId, (fresh) => ({ ...fresh, messages: [] }));
+    return thread ? { ok: true, thread } : { ok: false, error: "This thread is gone." };
+  },
   "panel-delete-thread": async ({ threadId }) => {
     const ok = await deleteThread(threadId);
     await forgetThreadLinks(threadId);
@@ -390,41 +479,69 @@ chrome.runtime.onConnect.addListener((port) => {
 
 // Phase 6 chat (I3): the panel asks over a "chat" port and gets the answer streamed back.
 //   panel → {type: "ask", chatId, tabId, threadId, question, force} | {type: "stop", chatId}
+//         | {type: "watch", threadId}: also stream any answer still running in that thread
 //   background → {chatId, type: "sources", mode, count} | {chatId, type: "delta", text} | {chatId, type: "checking"}
+//              | {chatId, type: "live", threadId, question, text, mode, status, checking, force}
 //              | {chatId, type: "done", thread, message} | {chatId, type: "error", error}
-// Closing the panel aborts the answer in progress; nothing is saved for it.
+// Closing the panel doesn't stop an answer (user, 2026-11-07): it finishes and is saved on the thread,
+// and a panel opened meanwhile picks it up with "watch". Only Stop aborts. chatId is the panel's
+// random id, unique across panels.
+const liveChats = new Map(); // chatId → {threadId, question, text, mode, status, checking, force, controller, watchers}
+
+function broadcast(live, message) {
+  for (const post of live.watchers) post(message);
+}
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "chat") return;
-  const running = new Map(); // chatId → AbortController
   let connected = true;
+  const post = (message) => connected && port.postMessage(message);
   port.onDisconnect.addListener(() => {
     connected = false;
-    for (const controller of running.values()) controller.abort();
+    for (const live of liveChats.values()) live.watchers.delete(post);
   });
-  const post = (message) => connected && port.postMessage(message);
 
   port.onMessage.addListener(async (message) => {
-    if (message?.type === "stop") return running.get(message.chatId)?.abort();
+    if (message?.type === "stop") return liveChats.get(message.chatId)?.controller.abort();
+    if (message?.type === "watch") {
+      for (const [chatId, live] of liveChats) {
+        if (live.threadId !== message.threadId || live.watchers.has(post)) continue;
+        live.watchers.add(post);
+        const { question, text, mode, status, checking, force } = live;
+        post({ chatId, type: "live", threadId: live.threadId, question, text, mode, status, checking, force });
+      }
+      return;
+    }
     if (message?.type !== "ask") return;
     const { chatId, tabId, threadId, question, force } = message;
-    const controller = new AbortController();
-    running.set(chatId, controller);
+    const live = { threadId, question, text: "", mode: null, status: "Finding sources…", checking: false, force: Boolean(force), controller: new AbortController(), watchers: new Set([post]) };
+    liveChats.set(chatId, live);
     try {
       const result = await answerQuestion(
         { tabId, threadId, question, force: Boolean(force) },
         {
-          signal: controller.signal,
-          onSources: (info) => post({ chatId, type: "sources", ...info }),
-          onDelta: (text) => post({ chatId, type: "delta", text }),
-          onChecking: () => post({ chatId, type: "checking" }),
+          signal: live.controller.signal,
+          onSources: (info) => {
+            live.mode = info.mode;
+            broadcast(live, { chatId, type: "sources", ...info });
+          },
+          onDelta: (text) => {
+            live.text += text;
+            broadcast(live, { chatId, type: "delta", text });
+          },
+          onChecking: () => {
+            live.checking = true;
+            broadcast(live, { chatId, type: "checking" });
+          },
         }
       );
-      post({ chatId, type: "done", thread: result.thread, message: result.message });
+      broadcast(live, { chatId, type: "done", thread: result.thread, message: result.message });
     } catch (err) {
-      if (!controller.signal.aborted) console.error("[Summarizer] chat failed:", err);
-      post({ chatId, type: "error", error: controller.signal.aborted ? "Stopped before any answer arrived." : String(err?.message ?? err) });
+      const stopped = live.controller.signal.aborted;
+      if (!stopped) console.error("[Summarizer] chat failed:", err);
+      broadcast(live, { chatId, type: "error", error: stopped ? "Stopped before any answer arrived." : String(err?.message ?? err) });
     } finally {
-      running.delete(chatId);
+      liveChats.delete(chatId);
     }
   });
 });

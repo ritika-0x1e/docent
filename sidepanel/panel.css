@@ -137,7 +137,7 @@ button:disabled {
 /* Split view (spec §4): sections on top, the conversation below, each scrolling on its own. */
 .reading-view {
   flex: 1 1 0;
-  min-height: 120px;
+  min-height: 48px;
   overflow-y: auto;
   padding: 12px;
 }
@@ -148,7 +148,54 @@ button:disabled {
   flex-direction: column;
   min-height: 200px;
   padding: 8px 12px 10px;
-  border-top: 1px solid var(--border);
+}
+
+/* Between the reading view and the chat: a thin line with a wider grab area. */
+.splitter {
+  position: relative;
+  flex: 0 0 9px;
+  margin: -4px 0;
+  cursor: row-resize;
+  touch-action: none;
+  z-index: 1;
+}
+
+.splitter::before {
+  content: "";
+  position: absolute;
+  inset: 4px 0 auto;
+  height: 1px;
+  background: var(--border);
+}
+
+.splitter::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  width: 32px;
+  height: 5px;
+  margin-left: -16px;
+  border-radius: 3px;
+  background: var(--border);
+}
+
+.splitter:hover::before,
+.splitter:focus-visible::before,
+.splitter.dragging::before,
+.splitter:hover::after,
+.splitter:focus-visible::after,
+.splitter.dragging::after {
+  background: var(--accent);
+}
+
+.splitter:focus-visible {
+  outline: none;
+}
+
+body.resizing {
+  cursor: row-resize;
+  user-select: none;
 }
 
 .chat-log {
@@ -236,7 +283,7 @@ button:disabled {
   font-size: 13px;
 }
 
-/* Source cards under an answer, numbered like its [n] chips. */
+/* Source cards under an answer, numbered like its [n] chips, inside a closed fold (user, 2026-11-07). */
 .sources {
   display: flex;
   flex-direction: column;
@@ -296,6 +343,19 @@ button:disabled {
   }
 }
 
+details.source-fold {
+  margin-top: 2px;
+}
+
+details.source-fold > .sources {
+  margin-top: 6px;
+}
+
+.source.active {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
 .chat-form {
   display: flex;
   align-items: flex-end;
@@ -314,6 +374,8 @@ button:disabled {
   color: var(--fg);
   font: inherit;
   resize: none;
+  box-sizing: border-box;
+  overflow-y: hidden; /* autoGrow turns scrolling on only past the max height */
 }
 
 .chat-form textarea:focus {
@@ -569,8 +631,8 @@ details summary {
   white-space: nowrap;
 }
 
-.thread-hover:hover .thread-count,
-.thread-hover:focus-visible .thread-count {
+.thread-hover.has-trail:hover .thread-count,
+.thread-hover.has-trail:focus-visible .thread-count {
   color: var(--fg);
 }
 
@@ -781,4 +843,51 @@ details.rejected summary {
   border-radius: 6px;
   color: var(--muted);
   white-space: pre-wrap;
+}
+
+/* The chip whose source is highlighted on the page right now. */
+.cite.active {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+/* Top of the chat: a small title and Clear chat, shown when there's a conversation. */
+.chat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: -2px 0 4px;
+}
+
+.chat-title {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: auto;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.text-button:hover,
+.text-button:focus-visible {
+  background: var(--surface);
+  color: var(--fg);
+}
+
+.text-button.confirm,
+.text-button.confirm:hover {
+  color: var(--error-border);
 }

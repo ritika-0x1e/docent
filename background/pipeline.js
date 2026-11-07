@@ -15,6 +15,7 @@ const CONTENT_FILES = [
   "content/classify.js",
   "content/blocks.js",
   "content/anchor.js",
+  "content/citations.js",
   "content/sources.js",
   "content/bootstrap.js",
 ];

@@ -51,8 +51,15 @@
 
     <main class="reading-view" id="reading-view"></main>
 
+    <!-- Drag to share the height between sections and chat; double-click resets. -->
+    <div class="splitter" id="splitter" role="separator" aria-orientation="horizontal" aria-label="Resize sections and chat" title="Drag to resize · double-click to reset" tabindex="0"></div>
+
     <!-- I3 (phase 6): chat over the tab's thread; replaced phase 4's find-sections box. -->
     <section class="chat-area" id="chat-area" aria-label="Chat">
+      <div class="chat-head" id="chat-head" hidden>
+        <span class="chat-title">Chat</span>
+        <button type="button" id="chat-clear" class="text-button"></button>
+      </div>
       <div class="chat-log" id="chat-log" aria-live="polite"></div>
       <form class="chat-form" id="chat-form">
         <textarea id="chat-input" rows="1" placeholder="Ask about this page…" disabled></textarea>

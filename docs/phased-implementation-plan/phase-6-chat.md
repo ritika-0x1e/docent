@@ -87,6 +87,23 @@ Implementation plan for build-sequence step 6 in `docs/master-spec.md` §6: **E1
 - Checks 1 and 4 on Gemini: does it cite [n], and does it refuse off-topic questions?
 - Once one Flash model's quota is used up, the next answers (logged as "quota used up, skipped until …").
 
+## Hallucination control (added 2026-11-07, after check 4 failed with qwen)
+The user asked for stricter guards. All three are local and add no LLM call (`lib/grounding.js`):
+1. **Relevance gate, before the call.** If no section of the thread scores at least **0.2** against the question, the reply is "The sources don't cover this." and the model isn't asked. The panel says so and offers **Ask anyway**, which replaces that turn. A short follow-up is retried together with the previous question before it's gated.
+   - Measured on 5 pages (Wikipedia, MDN, Python docs, React docs): clearly off-topic questions scored ≤ 0.21, real questions ≥ 0.25. The Paul Graham page timed out.
+   - Near-topic questions can't be gated this way ("async functions" on the Python control-flow page: 0.47). Guard 2 is for those.
+   - A greeting ("hi") is gated too, with the same message. Open idea, not decided: a friendlier reply for small talk.
+2. **Grounding check, after the call.** Each answer sentence is compared with ~45-word windows of the sources it was given, and every number in it must appear in the sources (or the question).
+   - Nothing found in the sources: shown as "The sources don't cover this.", with the model's text folded away ("none of it is in the sources"). History passes "not covered" on, so later answers don't build on it.
+   - Some sentences not found: those get a wavy underline and a note.
+   - **Word check (2026-11-07):** a sentence is also found if ≥ 80% of its content words are in the sources (short list items copied from the page scored ~0.2 on similarity and were wrongly underlined). Numbers must match either way.
+   - `SUPPORT_MIN = 0.5` is **a placeholder**: its measurement run was stopped because it was blocking the user's Ollama. To measure before relying on the "partly" marks.
+3. **The rule is repeated after the question** in the prompt, because small models follow the end of the message more than the system prompt.
+
+Also from the user's testing:
+- **Speed:** full Flash models think at "medium" by default and the thinking isn't shown. Chat now asks Flash models for `thinkingLevel: "low"` (3.8's lowest), leaves Flash-Lite at its default "minimal", and retries without the setting if a model rejects it. `maxOutputTokens` went from 1024 to 4096, because the cap includes thinking. The log line has timings (sources, first text, answer, check).
+- A "not covered" reply from the model shows the sections it was given, folded (phase 7).
+
 ## Exit criteria for phase 6
 - [x] Decisions 1–4 signed off *(2026-11-07; decision 1 as the model ladder)*
 - [x] `npm test` passes, with new tests for prompt building, citation parsing and message trimming (`lib/chat-prompt.js`) *(122/122, including `lib/gemini-ladder.test.js`)*

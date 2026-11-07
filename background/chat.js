@@ -1,5 +1,5 @@
 // Phase 6 chat (E1, E3, E4, E5 for chat): one question → sources → one streamed LLM answer → saved
-// on the thread. Sources are the text selected on the page (E3) or the top-5 sections across the
+// on the thread. Sources are the text selected on the page (E3) or the best 4–8 sections across the
 // thread's pages (E1). The answer streams from Gemini, walking the Flash model ladder as quotas run
 // out (decision 1), then from local Ollama. Prompt logic is in lib/chat-prompt.js, ladder logic in
 // lib/gemini-ladder.js. Loaded into the service worker with importScripts().
@@ -8,7 +8,7 @@
 const MODEL_LIST_KEY = "geminiFlashModels"; // { fetchedAt, models: [id…] } in chrome.storage.local
 const PARKED_KEY = "geminiParked"; // { [model]: until ms }: quota used up, skip until then
 const MODEL_LIST_TTL_MS = 24 * 3600 * 1000;
-const RETRIEVE_K = 5;
+const MAX_SOURCES = 8; // blended retrieval gives 4–8 sections; with a typo fix, both searches together are capped here
 const SNIPPET_CHARS = 320;
 
 // The chat ladder from the API's model list, cached for a day. If the list can't be read, the two
@@ -176,10 +176,36 @@ async function pageSelection(tabId) {
   }
 }
 
+// The thread's word list for typo correction (lib/spelling.js), kept for the last set of pages.
+let vocabCache = { key: null, vocab: null };
+async function threadVocabulary(refs) {
+  const key = refs.join("|");
+  if (vocabCache.key !== key) {
+    const corpora = await Promise.all(refs.map((id) => getCorpus(id)));
+    vocabCache = { key, vocab: buildVocabulary(corpora.flatMap((c) => (c?.sections ?? []).map((s) => `${s.heading ?? ""} ${s.text}`))) };
+  }
+  return vocabCache.vocab;
+}
+
+// Top hits for the question, and for its typo-corrected form when there is one: each section keeps
+// its better score.
+async function retrieveHits(refs, question) {
+  const { hits } = await retrieve(refs, question, "blended");
+  const corrected = correctQuery(question, await threadVocabulary(refs));
+  if (!corrected) return hits;
+  console.log(`[Summarizer/E1] also searching with ${corrected.fixes.map((f) => `"${f.from}" → "${f.to}"`).join(", ")}`);
+  const best = new Map(hits.map((h) => [`${h.corpusId}|${h.sectionId}`, h]));
+  for (const h of (await retrieve(refs, corrected.text, "blended")).hits) {
+    const key = `${h.corpusId}|${h.sectionId}`;
+    if (h.score > (best.get(key)?.score ?? -Infinity)) best.set(key, h);
+  }
+  return [...best.values()].sort((a, b) => b.score - a.score).slice(0, MAX_SOURCES);
+}
+
 // E1: the top sections across every page in the thread, with what the source cards need.
 async function retrieveSources(thread, question) {
   const pages = new Map(thread.pages.map((p) => [p.corpusRef, p]));
-  const { hits } = await retrieve(corpusRefs(thread), question, RETRIEVE_K);
+  const hits = await retrieveHits(corpusRefs(thread), question);
   return hits.map((h) => {
     const chunk = chunkSection(h.section)[h.bestChunkIndex]?.text ?? h.section.text;
     const page = pages.get(h.corpusId);
@@ -192,6 +218,9 @@ async function retrieveSources(thread, question) {
       heading: h.section.heading,
       headingPath: h.section.headingPath ?? [],
       text: h.section.text,
+      blocks: h.section.blocks ?? [], // for passages (phase 7); not saved on the message
+      highlightable: (h.section.blocks ?? []).some((b) => b.anchored),
+      jump: Boolean(h.section.jump), // Google Docs: Jump to section instead of a highlight
       snippet: chunk.slice(chunk.lastIndexOf("\n") + 1).slice(0, SNIPPET_CHARS),
       score: h.score,
     };
@@ -210,8 +239,57 @@ async function checkGrounding(answerText, sources, question) {
   const claimVecs = vectors.slice(0, toCheck.length);
   const windowVecs = vectors.slice(toCheck.length);
   const best = new Map(toCheck.map((s, i) => [s, Math.max(...windowVecs.map((w) => dot(claimVecs[i], w)))]));
-  const known = sourceNumbers(`${texts.join("\n")}\n${question}`);
-  return judgeAnswer(sentences, sentences.map((s) => best.get(s) ?? null), known);
+  const all = `${texts.join("\n")}\n${question}`;
+  return judgeAnswer(sentences, sentences.map((s) => best.get(s) ?? null), sourceNumbers(all), { words: sourceWordSet(all) });
+}
+
+// F2 (phase 7): the passages inside each cited section that support the claims citing it
+// (lib/passages.js). Answers that cite nothing match every claim against all their sources.
+// @returns {Map<number, {blockId, exact}[]>}  source number → passages (missing: show the section)
+async function findPassages(answerText, sources, cited, uncited) {
+  const result = new Map();
+  let claims;
+  if (uncited) {
+    const all = answerSentences(answerText).filter((s) => s.check).map((s) => s.plain);
+    claims = new Map(cited.map((n) => [n, all]));
+  } else {
+    claims = claimsByCitation(answerText);
+  }
+  const jobs = cited
+    .filter((n) => sources[n - 1]?.highlightable && claims.get(n)?.length)
+    .map((n) => ({ n, claims: claims.get(n), windows: blockWindows(sources[n - 1].blocks) }))
+    .filter((job) => job.windows.length);
+  if (!jobs.length) return result;
+  // One embedding call for everything.
+  const texts = jobs.flatMap((job) => [...job.claims, ...job.windows.map((w) => w.exact)]);
+  const { vectors } = await embedTexts(texts);
+  let at = 0;
+  const perJob = jobs.map((job) => {
+    const claimVecs = vectors.slice(at, (at += job.claims.length));
+    const windowVecs = vectors.slice(at, (at += job.windows.length));
+    return { job, claimVecs, windowVecs };
+  });
+  if (uncited) {
+    // Each claim goes to the one source it matches best, not to all five.
+    const owner = new Map(); // claim → {n, score}
+    for (const { job, claimVecs, windowVecs } of perJob) {
+      job.claims.forEach((claim, i) => {
+        const score = Math.max(...windowVecs.map((w) => dot(claimVecs[i], w)));
+        if (score > (owner.get(claim)?.score ?? -Infinity)) owner.set(claim, { n: job.n, score });
+      });
+    }
+    for (const { job, claimVecs, windowVecs } of perJob) {
+      const mine = claimVecs.filter((_, i) => owner.get(job.claims[i])?.n === job.n);
+      const picked = pickPassages(mine, job.windows, windowVecs);
+      if (picked.length) result.set(job.n, picked);
+    }
+  } else {
+    for (const { job, claimVecs, windowVecs } of perJob) {
+      const picked = pickPassages(claimVecs, job.windows, windowVecs);
+      if (picked.length) result.set(job.n, picked);
+    }
+  }
+  return result;
 }
 
 // The relevance gate (lib/grounding.js). A short follow-up ("and when was it rebuilt?") barely
@@ -248,7 +326,8 @@ async function answerQuestion({ tabId, threadId, question, force = false }, { on
     let sources;
     let relevant = true;
     if (selection) {
-      sources = [{ pageTitle: (await chrome.tabs.get(tabId).catch(() => null))?.title ?? null, heading: "Selected text", text: selection }];
+      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      sources = [{ pageTitle: tab?.title ?? null, pageUrl: tab?.url ?? null, heading: "Your selection", text: selection, selection: true }];
     } else if (force) {
       sources = await retrieveSources(thread, question);
     } else {
@@ -309,9 +388,22 @@ async function answerQuestion({ tabId, threadId, question, force = false }, { on
 
     let cited = mode === "retrieval" && !notCovered ? citedNumbers(content, sources.length) : [];
     // An answer that cites nothing (small models sometimes skip it) still came from these sources:
-    // show them all, marked as not cited.
-    const uncited = mode === "retrieval" && !cited.length && !notCovered && !stopped && content.trim().length > 0;
+    // show them all, marked as not cited. A "not covered" reply from the model shows them too, so it's
+    // visible whether retrieval missed or the model was strict (user, 2026-11-07). Not when the gate
+    // answered: those sections weren't close to the question at all.
+    const uncited = mode === "retrieval" && relevant && !cited.length && !stopped && content.trim().length > 0;
     if (uncited) cited = sources.map((_, i) => i + 1);
+    // Selection mode: the answer is about the selected text, so [1] is that text; clicking it
+    // highlights the selection on its page again (user, 2026-11-07).
+    if (mode === "selection" && !notCovered && !stopped && content.trim()) cited = [1];
+    let passages = new Map();
+    if (cited.length && !stopped && !notCovered) {
+      try {
+        passages = await findPassages(content, sources, cited, uncited);
+      } catch (err) {
+        console.warn("[Summarizer/F2] passage matching failed, citations show whole sections:", err.message);
+      }
+    }
     const assistantMessage = {
       role: "assistant",
       content,
@@ -328,9 +420,14 @@ async function answerQuestion({ tabId, threadId, question, force = false }, { on
       model: answer.model,
       fallback: answer.fallback,
       // Spec schema {pageUrl, sectionId}, plus what the cards and phase 7's highlighting need.
+      // passages (phase 7): the text inside the section that supports the claim, [{blockId, exact}].
       citedSections: cited.map((n) => {
-        const { text, ...source } = sources[n - 1];
-        return { n, ...source };
+        if (sources[n - 1].selection) {
+          const { text, selection, ...source } = sources[n - 1];
+          return { n, ...source, selection: true, quote: text, snippet: text.slice(0, SNIPPET_CHARS), highlightable: true, passages: [] };
+        }
+        const { text, blocks, ...source } = sources[n - 1];
+        return { n, ...source, passages: (passages.get(n) ?? []).map(({ blockId, exact }) => ({ blockId, exact })) };
       }),
     };
     const saved = await updateThread(thread.id, (fresh) => {
